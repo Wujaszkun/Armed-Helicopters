@@ -6,7 +6,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("ArmedHelicopters/ArmedHelicopters", "Wujaszkun", "0.2.5")]
+    [Info("Armed Helicopters", "Wujaszkun", "0.2.5")]
     [Description("Armament for scrap transport helicopter and Minicopter")]
     class ArmedHelicopters : RustPlugin
     {
