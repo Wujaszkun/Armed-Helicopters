@@ -1,0 +1,3 @@
+C:\Users\Pawel\source\repos\plugin\plugin\obj\Debug\netstandard2.0\plugin.csprojAssemblyReference.cache
+C:\Users\Pawel\source\repos\plugin\plugin\obj\Debug\netstandard2.0\plugin.AssemblyInfoInputs.cache
+C:\Users\Pawel\source\repos\plugin\plugin\obj\Debug\netstandard2.0\plugin.AssemblyInfo.cs
