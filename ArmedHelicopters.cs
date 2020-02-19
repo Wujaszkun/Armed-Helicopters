@@ -12,9 +12,8 @@ namespace Oxide.Plugins
     {
         public static ArmedHelicopters instance;
         public ScrapTransportHelicopter copter;
-        private BasePlayer player;
-        private int temp;
-        private List<ArmedTransportHelicopter> helicopterList = new List<ArmedTransportHelicopter>();
+        private List<Armament> armamentList = new List<Armament>();
+        private List<MiniCopter> helicopterList = new List<MiniCopter>();
         private bool isLoggingEnabled = true;
 
         [ChatCommand("armtransportcopter")]
@@ -22,23 +21,21 @@ namespace Oxide.Plugins
         {
             if (player.IsAdmin)
             {
-                foreach (var entity in GameObject.FindObjectsOfType<ScrapTransportHelicopter>())
-                {
-                    if (entity.gameObject.GetComponent<ArmedTransportHelicopter>() == null)
-                    {
-                        var copter = entity.gameObject.AddComponent<ArmedTransportHelicopter>();
-                        helicopterList.Add(copter as ArmedTransportHelicopter);
-                    }
-                }
+                ReloadCopterInformation();
+                ArmHelicopter();
             }
         }
+
         void OnServerInitialized()
         {
             instance = this;
+            ReloadCopterInformation();
+            ArmHelicopter();
         }
+
         void Unload()
         {
-            foreach (var copter in GameObject.FindObjectsOfType<ArmedTransportHelicopter>())
+            foreach (var copter in GameObject.FindObjectsOfType<Armament>())
             {
                 if (copter != null)
                 {
@@ -47,26 +44,30 @@ namespace Oxide.Plugins
                 }
             }
         }
+
+        private void ReloadCopterInformation()
+        {
+            helicopterList = new List<MiniCopter>(GameObject.FindObjectsOfType<MiniCopter>());
+            armamentList = new List<Armament>(GameObject.FindObjectsOfType<Armament>());
+        }
+
         void OnEntitySpawned(BaseNetworkable entity)
         {
-            if (entity.gameObject.GetComponent<ScrapTransportHelicopter>() != null)
+            if (entity.gameObject.GetComponent<MiniCopter>() != null)
             {
-                var copter = entity.gameObject.AddComponent<ArmedTransportHelicopter>();
-                helicopterList.Add(copter as ArmedTransportHelicopter);
+                ReloadCopterInformation();
+                ArmHelicopter();
             }
+
         }
+
         void OnEntityDeath(BaseCombatEntity entity, HitInfo info)
         {
-            if (entity.gameObject.GetComponent<ScrapTransportHelicopter>() != null)
-            {
-                var copter = entity.gameObject.AddComponent<ArmedTransportHelicopter>();
-                try { helicopterList.Remove(copter as ArmedTransportHelicopter); }
-                catch
-                {
-                    Log($"Copter {copter.gameObject.GetInstanceID()} not removed from list!");
-                }
-            }
+            ReloadCopterInformation();
+
+
         }
+
         private void Log(string message)
         {
             if (isLoggingEnabled)
@@ -74,12 +75,26 @@ namespace Oxide.Plugins
                 Puts(message);
             }
         }
-        class ArmedTransportHelicopter : MonoBehaviour
+
+        private void ArmHelicopter()
         {
-            private PieMenu pieMenu;
-            private ScrapTransportHelicopter transportCopter;
-            private Vector3 pos;
-            private Quaternion rot;
+            foreach (var heliBaseEnt in helicopterList)
+            {
+                if (heliBaseEnt.GetComponent<MiniCopter>() != null && heliBaseEnt.GetComponent<Armament>() == null)
+                {
+                    heliBaseEnt.gameObject.AddComponent<Armament>();
+                }
+            }
+        }
+
+        class Armament : MonoBehaviour
+        {
+            private static HelicopterType baseHeliType;
+            private MiniCopter baseHelicopter;
+
+
+            private Vector3 position;
+            private Quaternion rotation;
             private BaseEntity samRightEntity;
             private SamSite samRight;
             private float lastTargetVisibleTime;
@@ -114,8 +129,8 @@ namespace Oxide.Plugins
 
             private BaseEntity turretLeft2 = new BaseEntity();
             private BaseEntity turretRight2 = new BaseEntity();
-            private AutoTurret weaponLeft2AT = new AutoTurret();
-            private AutoTurret weaponRight2AT = new AutoTurret();
+            private AutoTurret leftTurret = new AutoTurret();
+            private AutoTurret rightTurret = new AutoTurret();
 
             private BaseEntity gunLeft;
             private GunTrap guntrapLeft;
@@ -141,19 +156,48 @@ namespace Oxide.Plugins
             private float nextActionTime;
             private float period = 1;
 
-            private float lastTimeRocketShot;
+            private float lastShot;
+
+            private enum HelicopterType
+            {
+                Transport,
+                Mini
+            }
             private void Awake()
             {
-                transportCopter = GetComponent<ScrapTransportHelicopter>();
-                pieMenu = new PieMenu();
-                lastTimeRocketShot = Time.time;
-                var location = transportCopter.transform.position;
-                var rotation = transportCopter.transform.rotation;
 
-                pos = new Vector3(location.x, location.y, location.z);
-                rot = new Quaternion(rotation.x, rotation.y, rotation.z, rotation.w);
-                AddRockets();
+                SetType();
+                baseHelicopter = GetComponent<MiniCopter>();
+
+                lastShot = Time.time;
+
+                position = baseHelicopter.transform.position;
+                rotation = baseHelicopter.transform.rotation;
+
+                SpawnArmament();
+
                 currentTubeIndex = 0;
+                instance.Puts("Initialized");
+                instance.Puts(baseHeliType.ToString());
+                instance.Puts(baseHelicopter.GetType().ToString());
+            }
+
+            private void SetType()
+            {
+                baseHeliType = GetComponent<ScrapTransportHelicopter>() != null ? HelicopterType.Transport : HelicopterType.Mini;
+            }
+            private void SpawnArmament()
+            {
+                switch (baseHeliType)
+                {
+                    case HelicopterType.Mini:
+                        SpawnGuns();
+                        break;
+
+                    case HelicopterType.Transport:
+                        SpawnRockets();
+                        break;
+                }
             }
 
             void FixedUpdate()
@@ -161,6 +205,10 @@ namespace Oxide.Plugins
                 try
                 {
                     if (storageContainer.inventory.itemList.Count == 0) canFireRockets = false;
+                }
+                catch { }
+                try
+                {
                     if (Time.time > nextActionTime)
                     {
                         nextActionTime = Time.time + period;
@@ -168,23 +216,29 @@ namespace Oxide.Plugins
                     }
                 }
                 catch { }
+
                 try
                 {
-                    KeepFacingFront(weaponLeft2AT);
-                    KeepFacingFront(weaponRight2AT);
+                    if (leftTurret != null) { KeepFacingFront(leftTurret); }
                 }
-                catch
-                {
+                catch { }
 
+                try
+                {
+                    if (rightTurret != null) { KeepFacingFront(rightTurret); }
                 }
-                try { ResetRockets(); }
+                catch { }
+
+                try
+                {
+                    ResetAmmo();
+                }
                 catch { }
             }
             public Dictionary<uint, string> spawnedEntityList = new Dictionary<uint, string>();
             public Dictionary<uint, BaseEntity> spawnedBaseEntityList = new Dictionary<uint, BaseEntity>();
             private void AddEntityToData(BaseEntity entity, Vector3 position)
             {
-
                 if (!spawnedEntityList.ContainsKey(entity.net.ID))
                 {
                     spawnedEntityList.Add(entity.net.ID, entity.ShortPrefabName);
@@ -212,59 +266,60 @@ namespace Oxide.Plugins
 
             public void HelicopterInput(InputState inputState, BasePlayer player)
             {
-                if (transportCopter.GetPlayerSeat(player) == 0  && inputState.WasJustPressed(BUTTON.FIRE_PRIMARY))
+                if (baseHelicopter.GetPlayerSeat(player) == 0 && inputState.WasJustPressed(BUTTON.FIRE_PRIMARY))
                 {
                     FireTurretsRockets(player);
                 }
-                if (transportCopter.GetPlayerSeat(player) == 0 && inputState.IsDown(BUTTON.FIRE_SECONDARY))
+                if (baseHelicopter.GetPlayerSeat(player) == 0 && inputState.IsDown(BUTTON.FIRE_SECONDARY))
                 {
                     FireTurretsGuns(player);
                 }
             }
-            internal void AddRockets()
+
+            internal void SpawnRockets()
             {
                 float yAdjustment = -.01f;
                 //spawn wings
-                barrelright1 = GameManager.server.CreateEntity("assets/bundled/prefabs/radtown/loot_barrel_1.prefab", pos, rot, false);
-                barrelright1.SetParent(transportCopter);
+                barrelright1 = GameManager.server.CreateEntity("assets/bundled/prefabs/radtown/loot_barrel_1.prefab", position, rotation, false);
+                barrelright1.SetParent(baseHelicopter);
                 barrelright1.transform.localPosition = new Vector3(3f, 1.15f + yAdjustment, 0f);
                 barrelright1.transform.localEulerAngles = new Vector3(0, 90, 90);
                 barrelright1.Spawn();
                 AddEntityToData(barrelright1, barrelright1.transform.position);
 
-                barrelleft1 = GameManager.server.CreateEntity("assets/bundled/prefabs/radtown/loot_barrel_1.prefab", pos, rot, false);
-                barrelleft1.SetParent(transportCopter);
+                barrelleft1 = GameManager.server.CreateEntity("assets/bundled/prefabs/radtown/loot_barrel_1.prefab", position, rotation, false);
+                barrelleft1.SetParent(baseHelicopter);
                 barrelleft1.transform.localPosition = new Vector3(-3f, 1.15f + yAdjustment, 0f);
                 barrelleft1.transform.localEulerAngles = new Vector3(0, 90, 90);
                 barrelleft1.Spawn();
                 AddEntityToData(barrelleft1, barrelleft1.transform.position);
 
-                wingRight = GameManager.server.CreateEntity("assets/bundled/prefabs/static/door.hinged.industrial_a_a.prefab", pos, rot, false);
-                wingRight.SetParent(transportCopter);
+                wingRight = GameManager.server.CreateEntity("assets/bundled/prefabs/static/door.hinged.industrial_a_a.prefab", position, rotation, false);
+                wingRight.SetParent(baseHelicopter);
                 wingRight.transform.localPosition = new Vector3(3.5f, 1.5f, 0.5f); //(2f,1f,0f);
                 wingRight.transform.localEulerAngles = new Vector3(0f, 0f, 90f);
                 wingRight?.Spawn();
                 MakeDoorsInactive(wingRight.GetComponent<Door>());
                 AddEntityToData(wingRight, wingRight.transform.position);
 
-                wingRightTilted = GameManager.server.CreateEntity("assets/bundled/prefabs/static/door.hinged.vent.prefab", pos, rot, false);
-                wingRightTilted.SetParent(transportCopter);
+                wingRightTilted = GameManager.server.CreateEntity("assets/bundled/prefabs/static/door.hinged.vent.prefab", position, rotation, false);
+                wingRightTilted.SetParent(baseHelicopter);
                 wingRightTilted.transform.localPosition = new Vector3(2f, 1.5f, 0.5f); //(2f,1f,0f);
                 wingRightTilted.transform.localEulerAngles = new Vector3(0f, 0f, 130f);
                 wingRightTilted?.Spawn();
                 MakeDoorsInactive(wingRightTilted.GetComponent<Door>());
                 AddEntityToData(wingRightTilted, wingRightTilted.transform.position);
 
-                wingLeft = GameManager.server.CreateEntity("assets/bundled/prefabs/static/door.hinged.industrial_a_a.prefab", pos, rot, false);
-                wingLeft.SetParent(transportCopter);
+                wingLeft = GameManager.server.CreateEntity("assets/bundled/prefabs/static/door.hinged.industrial_a_a.prefab", position, rotation, false);
+                wingLeft.SetParent(baseHelicopter);
                 wingLeft.transform.localPosition = new Vector3(-3.5f, 1.5f, 0.5f); //(2f,1f,0f);
                 wingLeft.transform.localEulerAngles = new Vector3(0, 0, 270);
                 wingLeft?.Spawn();
                 MakeDoorsInactive(wingLeft.GetComponent<Door>());
                 AddEntityToData(wingLeft, wingLeft.transform.position);
 
-                wingLeftTilted = GameManager.server.CreateEntity("assets/bundled/prefabs/static/door.hinged.vent.prefab", pos, rot, false);
-                wingLeftTilted.SetParent(transportCopter);
+                wingLeftTilted = GameManager.server.CreateEntity("assets/bundled/prefabs/static/door.hinged.vent.prefab", position, rotation, false);
+                wingLeftTilted.SetParent(baseHelicopter);
                 wingLeftTilted.transform.localPosition = new Vector3(-2f, 1.5f, 0.5f); //(2f,1f,0f);
                 wingLeftTilted.transform.localEulerAngles = new Vector3(0f, 0f, 230f);
                 wingLeftTilted?.Spawn();
@@ -278,30 +333,30 @@ namespace Oxide.Plugins
                 float spread2 = 0.4f;
                 float spread3 = 0.2f;
 
-                tube1L = SpawnArmamaent(new Vector3(-spread1 + offset_left_x, 1.4f, 1f), new Vector3(0, 277, 130), transportCopter);
-                tube1R = SpawnArmamaent(new Vector3(-spread1 + offset_right_x, 1.4f, 1f), new Vector3(0, 277, 130), transportCopter);
-                tube2L = SpawnArmamaent(new Vector3(spread1 + offset_left_x, 1.4f, 1f), new Vector3(0, 277, 130), transportCopter);
-                tube2R = SpawnArmamaent(new Vector3(spread1 + offset_right_x, 1.4f, 1f), new Vector3(0, 277, 130), transportCopter);
-                tube3L = SpawnArmamaent(new Vector3(-spread2 + offset_left_x, 1.1f, 1f), new Vector3(0, 277, 130), transportCopter);
-                tube3R = SpawnArmamaent(new Vector3(-spread2 + offset_right_x, 1.1f, 1f), new Vector3(0, 277, 130), transportCopter);
-                tube4L = SpawnArmamaent(new Vector3(spread2 + offset_left_x, 1.1f, 1f), new Vector3(0, 277, 130), transportCopter);
-                tube4R = SpawnArmamaent(new Vector3(spread2 + offset_right_x, 1.1f, 1f), new Vector3(0, 277, 130), transportCopter);
-                tube5L = SpawnArmamaent(new Vector3(-spread3 + offset_left_x, 0.85f, 1f), new Vector3(0, 277, 130), transportCopter);
-                tube5R = SpawnArmamaent(new Vector3(-spread3 + offset_right_x, 0.85f, 1f), new Vector3(0, 277, 130), transportCopter);
-                tube6L = SpawnArmamaent(new Vector3(spread3 + offset_left_x, 0.85f, 1f), new Vector3(0, 277, 130), transportCopter);
-                tube6R = SpawnArmamaent(new Vector3(spread3 + offset_right_x, 0.85f, 1f), new Vector3(0, 277, 130), transportCopter);
+                tube1L = SpawnArmamaent(new Vector3(-spread1 + offset_left_x, 1.4f, 1f), new Vector3(0, 277, 130), baseHelicopter);
+                tube1R = SpawnArmamaent(new Vector3(-spread1 + offset_right_x, 1.4f, 1f), new Vector3(0, 277, 130), baseHelicopter);
+                tube2L = SpawnArmamaent(new Vector3(spread1 + offset_left_x, 1.4f, 1f), new Vector3(0, 277, 130), baseHelicopter);
+                tube2R = SpawnArmamaent(new Vector3(spread1 + offset_right_x, 1.4f, 1f), new Vector3(0, 277, 130), baseHelicopter);
+                tube3L = SpawnArmamaent(new Vector3(-spread2 + offset_left_x, 1.1f, 1f), new Vector3(0, 277, 130), baseHelicopter);
+                tube3R = SpawnArmamaent(new Vector3(-spread2 + offset_right_x, 1.1f, 1f), new Vector3(0, 277, 130), baseHelicopter);
+                tube4L = SpawnArmamaent(new Vector3(spread2 + offset_left_x, 1.1f, 1f), new Vector3(0, 277, 130), baseHelicopter);
+                tube4R = SpawnArmamaent(new Vector3(spread2 + offset_right_x, 1.1f, 1f), new Vector3(0, 277, 130), baseHelicopter);
+                tube5L = SpawnArmamaent(new Vector3(-spread3 + offset_left_x, 0.85f, 1f), new Vector3(0, 277, 130), baseHelicopter);
+                tube5R = SpawnArmamaent(new Vector3(-spread3 + offset_right_x, 0.85f, 1f), new Vector3(0, 277, 130), baseHelicopter);
+                tube6L = SpawnArmamaent(new Vector3(spread3 + offset_left_x, 0.85f, 1f), new Vector3(0, 277, 130), baseHelicopter);
+                tube6R = SpawnArmamaent(new Vector3(spread3 + offset_right_x, 0.85f, 1f), new Vector3(0, 277, 130), baseHelicopter);
 
                 //spawn back door
-                var backDoor = GameManager.server.CreateEntity("assets/bundled/prefabs/static/door.hinged.industrial_a_h.prefab", pos, rot, true);
-                backDoor.SetParent(transportCopter, 0);
+                var backDoor = GameManager.server.CreateEntity("assets/bundled/prefabs/static/door.hinged.industrial_a_h.prefab", position, rotation, true);
+                backDoor.SetParent(baseHelicopter, 0);
                 backDoor.transform.localPosition = new Vector3(-0.6f, 0.7f, -3.2f); //(2f,1f,0f);
                 backDoor.transform.localEulerAngles = new Vector3(0f, 90f, 40f);
                 backDoor?.Spawn();
                 backDoor.enableSaving = false;
                 AddEntityToData(backDoor, backDoor.transform.position);
 
-                var backDoor2 = GameManager.server.CreateEntity("assets/bundled/prefabs/static/door.hinged.industrial_a_h.prefab", pos, rot, true);
-                backDoor2.SetParent(transportCopter, 0);
+                var backDoor2 = GameManager.server.CreateEntity("assets/bundled/prefabs/static/door.hinged.industrial_a_h.prefab", position, rotation, true);
+                backDoor2.SetParent(baseHelicopter, 0);
                 backDoor2.transform.localPosition = new Vector3(0.6f, 2.5f, -1.7f); //(2f,1f,0f);
                 backDoor2.transform.localEulerAngles = new Vector3(180f, 0f, 0f) + new Vector3(0f, 90f, -40f);
                 backDoor2?.Spawn();
@@ -312,8 +367,8 @@ namespace Oxide.Plugins
                 //spawn rocket containers
                 try
                 {
-                    storage = GameManager.server.CreateEntity("assets/prefabs/deployable/dropbox/dropbox.deployed.prefab", pos, rot, true);
-                    storage.SetParent(transportCopter, 0);
+                    storage = GameManager.server.CreateEntity("assets/prefabs/deployable/dropbox/dropbox.deployed.prefab", position, rotation, true);
+                    storage.SetParent(baseHelicopter, 0);
                     storage.transform.localPosition = new Vector3(1f, 1.35f, 1.7f);
                     storage.transform.localEulerAngles = new Vector3(0f, 90f, 0f);
                     storage?.Spawn();
@@ -324,42 +379,153 @@ namespace Oxide.Plugins
                 }
                 catch { }
 
-                //spawn guns
                 try
                 {
-                    turretRight2 = GameManager.server.CreateEntity("assets/prefabs/npc/autoturret/autoturret_deployed.prefab", pos, rot, true);
+                    turretRight2 = GameManager.server.CreateEntity("assets/prefabs/npc/autoturret/autoturret_deployed.prefab", position, rotation, true);
                     turretRight2.transform.localEulerAngles = new Vector3(0, 0, 90);
                     turretRight2.transform.localPosition = new Vector3(0f, 1.5f, -0.2f);
                     turretRight2.SetParent(wingRight, 0);
                     turretRight2?.Spawn();
                     AddEntityToData(turretRight2, turretRight2.transform.position);
 
-                    weaponRight2AT = turretRight2.GetComponent<AutoTurret>();
-                    weaponRight2AT.SetPeacekeepermode(true);
+                    rightTurret = turretRight2.GetComponent<AutoTurret>();
+                    rightTurret.SetPeacekeepermode(true);
                 }
-                catch { }
-                turretLeft2 = GameManager.server.CreateEntity("assets/prefabs/npc/autoturret/autoturret_deployed.prefab", pos, rot, true);
+                catch (Exception e) { instance.Puts($"Right Turret not spawned: {e}"); }
+
+                try
+                {
+                    turretLeft2 = GameManager.server.CreateEntity("assets/prefabs/npc/autoturret/autoturret_deployed.prefab", position, rotation, true);
+                    turretLeft2.transform.localEulerAngles = new Vector3(0, 0, -90);
+                    turretLeft2.transform.localPosition = new Vector3(0f, 1.5f, -0.2f);
+                    turretLeft2.SetParent(wingLeft, 0);
+                    turretLeft2?.Spawn();
+                    AddEntityToData(turretLeft2, turretLeft2.transform.position);
+
+                    leftTurret = turretLeft2.GetComponent<AutoTurret>();
+                    leftTurret.SetPeacekeepermode(true);
+                }
+                catch (Exception e) { instance.Puts($"Left Turret not spawned: {e}"); }
+
+                try { rightTurret.UpdateFromInput(100, 1); } catch { }
+                try { leftTurret.UpdateFromInput(100, 1); } catch { }
+
+                turretsSpawned = true;
+            }
+
+            private void SpawnGuns()
+            {
+                spawnWings(this.position, this.rotation);
+
+                turretRight1 = GameManager.server.CreateEntity("assets/prefabs/npc/autoturret/autoturret_deployed.prefab", this.position, this.rotation, true);
+                turretRight1.transform.localEulerAngles = new Vector3(0, 0, 90);
+                turretRight1.transform.localPosition = new Vector3(0f, 1f, 0f);
+                turretRight1?.Spawn();
+                turretRight1.SetParent(wingRight, 0);
+                AddEntityToData(turretRight1, turretRight1.transform.position);
+
+                weaponRight1AT = turretRight1.GetComponent<AutoTurret>();
+                weaponRight1AT.SetPeacekeepermode(true);
+
+                turretRight2 = GameManager.server.CreateEntity("assets/prefabs/npc/autoturret/autoturret_deployed.prefab", this.position, this.rotation, true);
+                turretRight2.transform.localEulerAngles = new Vector3(0, 0, 90);
+                turretRight2.transform.localPosition = new Vector3(0f, 2f, 0f);
+                turretRight2?.Spawn();
+                turretRight2.SetParent(wingRight, 0);
+                AddEntityToData(turretRight2, turretRight2.transform.position);
+
+                weaponRight2AT = turretRight2.GetComponent<AutoTurret>();
+                weaponRight2AT.SetPeacekeepermode(true);
+
+                turretLeft1 = GameManager.server.CreateEntity("assets/prefabs/npc/autoturret/autoturret_deployed.prefab", this.position, this.rotation, true);
+                turretLeft1.transform.localEulerAngles = new Vector3(0, 0, -90);
+                turretLeft1.transform.localPosition = new Vector3(0f, 1f, 0f);
+                turretLeft1?.Spawn();
+                turretLeft1.SetParent(wingLeft, 0);
+                AddEntityToData(turretLeft1, turretLeft1.transform.position);
+
+                weaponLeft1AT = turretLeft1.GetComponent<AutoTurret>();
+                weaponLeft1AT.SetPeacekeepermode(true);
+
+                turretLeft2 = GameManager.server.CreateEntity("assets/prefabs/npc/autoturret/autoturret_deployed.prefab", this.position, this.rotation, true);
                 turretLeft2.transform.localEulerAngles = new Vector3(0, 0, -90);
-                turretLeft2.transform.localPosition = new Vector3(0f, 1.5f, -0.2f);
-                turretLeft2.SetParent(wingLeft, 0);
+                turretLeft2.transform.localPosition = new Vector3(0f, 2f, 0f);
                 turretLeft2?.Spawn();
+                turretLeft2.SetParent(wingLeft, 0);
                 AddEntityToData(turretLeft2, turretLeft2.transform.position);
 
                 weaponLeft2AT = turretLeft2.GetComponent<AutoTurret>();
                 weaponLeft2AT.SetPeacekeepermode(true);
 
-                try { weaponRight2AT.UpdateFromInput(100, 1); } catch { }
-                try { weaponLeft2AT.UpdateFromInput(100, 1); } catch { }
-
                 turretsSpawned = true;
+                PowerUp();
             }
-            private void ResetRockets()
+            public void spawnWings(Vector3 pos, Quaternion rot)
             {
-                if(Time.time > lastTimeRocketShot + 120 && storageContainer.inventory.itemList.Count == 0 && storageContainer.inventory.itemList.Count < 12)
+                wingLeftBottom = GameManager.server.CreateEntity("assets/prefabs/deployable/signs/sign.post.single.prefab", pos, rot, true);
+                wingLeftBottom.transform.localEulerAngles = new Vector3(90, 0, 90);
+                wingLeftBottom.transform.localPosition = new Vector3(-0.3f, 0.2f, 0f);
+                wingLeftBottom?.Spawn();
+                wingLeftBottom.SetParent(baseHelicopter, 0);
+                AddEntityToData(wingLeftBottom, wingLeftBottom.transform.position);
+
+                wingRightBottom = GameManager.server.CreateEntity("assets/prefabs/deployable/signs/sign.post.single.prefab", pos, rot, true);
+                wingRightBottom.transform.localEulerAngles = new Vector3(90, 0, 270);
+                wingRightBottom.transform.localPosition = new Vector3(0.3f, 0.2f, 0f);
+                wingRightBottom?.Spawn();
+                wingRightBottom.SetParent(baseHelicopter, 0);
+                AddEntityToData(wingRightBottom, wingRightBottom.transform.position);
+
+                wingLeftTop = GameManager.server.CreateEntity("assets/prefabs/deployable/signs/sign.post.single.prefab", pos, rot, true);
+                wingLeftTop.transform.localEulerAngles = new Vector3(90, 0, 90);
+                wingLeftTop.transform.localPosition = new Vector3(-0.3f, 1.2f, 0f);
+                wingLeftTop?.Spawn();
+                wingLeftTop.SetParent(baseHelicopter, 0);
+                AddEntityToData(wingLeftTop, wingLeftTop.transform.position);
+
+                wingRightTop = GameManager.server.CreateEntity("assets/prefabs/deployable/signs/sign.post.single.prefab", pos, rot, true);
+                wingRightTop.transform.localEulerAngles = new Vector3(90, 0, 270);
+                wingRightTop.transform.localPosition = new Vector3(0.3f, 1.2f, 0f);
+                wingRightTop?.Spawn();
+                wingRightTop.SetParent(baseHelicopter, 0);
+                AddEntityToData(wingRightTop, wingRightTop.transform.position);
+
+                wingLeft = GameManager.server.CreateEntity("assets/prefabs/deployable/signs/sign.post.single.prefab", pos, rot, true);
+                wingLeft.transform.localEulerAngles = new Vector3(90, 0, 90);
+                wingLeft.transform.localPosition = new Vector3(-0.3f, 0.75f, 0f);
+                wingLeft?.Spawn();
+                wingLeft.SetParent(baseHelicopter, 0);
+                AddEntityToData(wingLeft, wingLeft.transform.position);
+
+                wingRight = GameManager.server.CreateEntity("assets/prefabs/deployable/signs/sign.post.single.prefab", pos, rot, true);
+                wingRight.transform.localEulerAngles = new Vector3(90, 0, 270);
+                wingRight.transform.localPosition = new Vector3(0.3f, 0.75f, 0f);
+                wingRight?.Spawn();
+                wingRight.SetParent(baseHelicopter, 0);
+                AddEntityToData(wingRight, wingRight.transform.position);
+            }
+            public void PowerUp()
+            {
+                try { weaponRight1AT.UpdateFromInput(100, 1); } catch { }
+                try { weaponRight2AT.UpdateFromInput(100, 1); } catch { }
+                try { weaponLeft1AT.UpdateFromInput(100, 1); } catch { }
+                try { weaponLeft2AT.UpdateFromInput(100, 1); } catch { }
+            }
+            public void PowerDown()
+            {
+                try { weaponRight1AT.UpdateFromInput(0, 1); } catch { }
+                try { weaponRight2AT.UpdateFromInput(0, 1); } catch { }
+                try { weaponLeft1AT.UpdateFromInput(0, 1); } catch { }
+                try { weaponLeft2AT.UpdateFromInput(0, 1); } catch { }
+            }
+
+            private void ResetAmmo()
+            {
+                if (Time.time > lastShot + 120 && storageContainer.inventory.itemList.Count == 0 && storageContainer.inventory.itemList.Count < 12)
                 {
                     storageContainer.inventory.AddItem(ItemManager.FindItemDefinition("ammo.rocket.fire"), 12);
                     instance.Puts($"Current pilot: transportCopter.GetDriver().displayName");
-                    transportCopter.GetDriver().ChatMessage("Rockets reloaded!");
+                    baseHelicopter.GetDriver().ChatMessage("Rockets reloaded!");
                 }
             }
 
@@ -377,6 +543,7 @@ namespace Oxide.Plugins
                 }
                 catch { }
             }
+
             private void MakeDoorsInactive(Door door)
             {
                 door.canHandOpen = false;
@@ -388,14 +555,14 @@ namespace Oxide.Plugins
 
             private BaseEntity SpawnArmamaent(Vector3 position, Vector3 rotation, BaseEntity parent)
             {
-                var entityParent = GameManager.server.CreateEntity("assets/prefabs/tools/pager/pager.entity.prefab", pos, rot, true);
+                var entityParent = GameManager.server.CreateEntity("assets/prefabs/tools/pager/pager.entity.prefab", this.position, this.rotation, true);
                 entityParent.Spawn();
                 entityParent.SetParent(parent);
                 entityParent.transform.localPosition = position;
                 entityParent.transform.localEulerAngles = rotation;
                 AddEntityToData(entityParent, entityParent.transform.position);
 
-                var entityTube = GameManager.server.CreateEntity("assets/prefabs/weapons/rocketlauncher/rocket_launcher.entity.prefab", pos, rot, true);
+                var entityTube = GameManager.server.CreateEntity("assets/prefabs/weapons/rocketlauncher/rocket_launcher.entity.prefab", this.position, this.rotation, true);
                 entityTube.SetParent(entityParent);
                 entityTube?.Spawn();
 
@@ -407,7 +574,7 @@ namespace Oxide.Plugins
 
             private Vector3 GetDirection(float accuracy)
             {
-                return (Vector3)(Quaternion.Euler(UnityEngine.Random.Range((float)(-accuracy * 0.5f), (float)(accuracy * 0.5f)), UnityEngine.Random.Range((float)(-accuracy * 0.5f), (float)(accuracy * 0.5f)), UnityEngine.Random.Range((float)(-accuracy * 0.5f), (float)(accuracy * 0.5f))) * transportCopter.transform.forward);
+                return (Vector3)(Quaternion.Euler(UnityEngine.Random.Range((float)(-accuracy * 0.5f), (float)(accuracy * 0.5f)), UnityEngine.Random.Range((float)(-accuracy * 0.5f), (float)(accuracy * 0.5f)), UnityEngine.Random.Range((float)(-accuracy * 0.5f), (float)(accuracy * 0.5f))) * baseHelicopter.transform.forward);
             }
 
             private string GetProjectileFromItem(Item item)
@@ -444,20 +611,20 @@ namespace Oxide.Plugins
 
                     Tubes.Clear();
 
-                    Tubes.Add(new Vector3(-spread1 + offset_left_x, 1.4f, z) + transportCopter.transform.localPosition);
-                    Tubes.Add(new Vector3(-spread1 + offset_right_x, 1.4f, z) + transportCopter.transform.localPosition);
-                    Tubes.Add(new Vector3(spread1 + offset_left_x, 1.4f, z) + transportCopter.transform.localPosition);
-                    Tubes.Add(new Vector3(spread1 + offset_left_x, 1.4f, z) + transportCopter.transform.localPosition);
+                    Tubes.Add(new Vector3(-spread1 + offset_left_x, 1.4f, z) + baseHelicopter.transform.localPosition);
+                    Tubes.Add(new Vector3(-spread1 + offset_right_x, 1.4f, z) + baseHelicopter.transform.localPosition);
+                    Tubes.Add(new Vector3(spread1 + offset_left_x, 1.4f, z) + baseHelicopter.transform.localPosition);
+                    Tubes.Add(new Vector3(spread1 + offset_left_x, 1.4f, z) + baseHelicopter.transform.localPosition);
 
-                    Tubes.Add(new Vector3(-spread2 + offset_right_x, 1.1f, z) + transportCopter.transform.localPosition);
-                    Tubes.Add(new Vector3(-spread2 + offset_left_x, 1.1f, z) + transportCopter.transform.localPosition);
-                    Tubes.Add(new Vector3(spread2 + offset_right_x, 1.1f, z) + transportCopter.transform.localPosition);
-                    Tubes.Add(new Vector3(spread2 + offset_left_x, 1.1f, z) + transportCopter.transform.localPosition);
+                    Tubes.Add(new Vector3(-spread2 + offset_right_x, 1.1f, z) + baseHelicopter.transform.localPosition);
+                    Tubes.Add(new Vector3(-spread2 + offset_left_x, 1.1f, z) + baseHelicopter.transform.localPosition);
+                    Tubes.Add(new Vector3(spread2 + offset_right_x, 1.1f, z) + baseHelicopter.transform.localPosition);
+                    Tubes.Add(new Vector3(spread2 + offset_left_x, 1.1f, z) + baseHelicopter.transform.localPosition);
 
-                    Tubes.Add(new Vector3(-spread3 + offset_left_x, 0.85f, z) + transportCopter.transform.localPosition);
-                    Tubes.Add(new Vector3(-spread3 + offset_right_x, 0.85f, z) + transportCopter.transform.localPosition);
-                    Tubes.Add(new Vector3(spread3 + offset_left_x, 0.85f, z) + transportCopter.transform.localPosition);
-                    Tubes.Add(new Vector3(spread3 + offset_right_x, 0.85f, z) + transportCopter.transform.localPosition);
+                    Tubes.Add(new Vector3(-spread3 + offset_left_x, 0.85f, z) + baseHelicopter.transform.localPosition);
+                    Tubes.Add(new Vector3(-spread3 + offset_right_x, 0.85f, z) + baseHelicopter.transform.localPosition);
+                    Tubes.Add(new Vector3(spread3 + offset_left_x, 0.85f, z) + baseHelicopter.transform.localPosition);
+                    Tubes.Add(new Vector3(spread3 + offset_right_x, 0.85f, z) + baseHelicopter.transform.localPosition);
 
                     Vector3 originR = TubesParents[currentTubeIndex].transform.position;
 
@@ -477,16 +644,18 @@ namespace Oxide.Plugins
                         }
                         rocketsR.SendMessage("InitializeVelocity", (Vector3)(direction * 75f));
                         rocketsR.Spawn();
-                        lastTimeRocketShot = Time.time;
+                        lastShot = Time.time;
                         var itemAmount = storageContainer.inventory.FindItemsByItemName("ammo.rocket.fire").amount;
-                        if (itemAmount > 0) { transportCopter.GetDriver().ChatMessage($"Rockets left: {storageContainer.inventory.FindItemsByItemName("ammo.rocket.fire").amount}"); }
+                        if (itemAmount > 0) { baseHelicopter.GetDriver().ChatMessage($"Rockets left: {storageContainer.inventory.FindItemsByItemName("ammo.rocket.fire").amount}"); }
 
                     }
                 }
             }
-            private RaycastHit hitInfo;
+
             private Vector3 FindTarget(Vector3 target, BasePlayer player)
             {
+                RaycastHit hitInfo;
+
                 if (!UnityEngine.Physics.Raycast(player.eyes.HeadRay(), out hitInfo, Mathf.Infinity, -1063040255))
                 {
                 }
@@ -494,24 +663,32 @@ namespace Oxide.Plugins
                 return hitpoint;
             }
             private Vector3 target;
+            private BaseEntity turretRight1;
+            private AutoTurret weaponRight1AT;
+            private AutoTurret weaponRight2AT;
+            private BaseEntity turretLeft1;
+            private AutoTurret weaponLeft1AT;
+            private AutoTurret weaponLeft2AT;
+
             public void FireTurretsGuns(BasePlayer player)
             {
+
                 try
                 {
-                    if (weaponLeft2AT.IsOnline() == true)
+                    if (leftTurret.IsOnline() == true)
                     {
-                        weaponLeft2AT.Reload();
-                        weaponLeft2AT.FireGun(FindTarget(target, player), ConVar.PatrolHelicopter.bulletAccuracy);
+                        leftTurret.Reload();
+                        leftTurret.FireAttachedGun(FindTarget(target, player), ConVar.PatrolHelicopter.bulletAccuracy);
                     }
                 }
                 catch { }
 
                 try
                 {
-                    if (weaponRight2AT.IsOnline() == true)
+                    if (rightTurret.IsOnline() == true)
                     {
-                        weaponRight2AT.Reload();
-                        weaponRight2AT.FireGun(FindTarget(target, player), ConVar.PatrolHelicopter.bulletAccuracy);
+                        rightTurret.Reload();
+                        rightTurret.FireAttachedGun(FindTarget(target, player), ConVar.PatrolHelicopter.bulletAccuracy);
                     }
                 }
                 catch { }
@@ -521,7 +698,7 @@ namespace Oxide.Plugins
         {
             try
             {
-                var copter = player.GetMountedVehicle().GetComponent<ArmedTransportHelicopter>();
+                var copter = player.GetMountedVehicle().GetComponent<Armament>();
                 copter.HelicopterInput(input, player);
             }
             catch
