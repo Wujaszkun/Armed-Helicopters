@@ -87,6 +87,16 @@ namespace Oxide.Plugins
             }
         }
 
+        void OnPlayerInput(BasePlayer player, InputState input)
+        {
+            try
+            {
+                var copter = player.GetMountedVehicle().GetComponent<Armament>();
+                copter.HelicopterInput(input, player);
+            }
+            catch { }
+        }
+
         class Armament : MonoBehaviour
         {
             private static HelicopterType baseHeliType;
@@ -98,18 +108,7 @@ namespace Oxide.Plugins
 
             private BaseEntity wingLeft;
             private BaseEntity wingRight;
-            private BaseEntity tube1L;
-            private BaseEntity tube2L;
-            private BaseEntity tube3L;
-            private BaseEntity tube4L;
-            private BaseEntity tube5L;
-            private BaseEntity tube6L;
-            private BaseEntity tube1R;
-            private BaseEntity tube2R;
-            private BaseEntity tube3R;
-            private BaseEntity tube4R;
-            private BaseEntity tube5R;
-            private BaseEntity tube6R;
+
 
             private AutoTurret leftTurret = new AutoTurret();
             private AutoTurret rightTurret = new AutoTurret();
@@ -118,6 +117,7 @@ namespace Oxide.Plugins
             List<Vector3> Tubes = new List<Vector3>();
             List<BaseEntity> TubesEntities = new List<BaseEntity>();
             List<BaseEntity> TubesParents = new List<BaseEntity>();
+            List<AutoTurret> Turrets = new List<AutoTurret>();
             private int currentTubeIndex;
             private BaseEntity backDoor;
             private StorageContainer storageContainer;
@@ -133,6 +133,7 @@ namespace Oxide.Plugins
                 Transport,
                 Mini
             }
+
             private void Awake()
             {
                 turretsSpawned = false;
@@ -147,6 +148,7 @@ namespace Oxide.Plugins
                 SpawnArmament();
 
                 currentTubeIndex = 0;
+                ChangeGun(index);
                 instance.Puts("Initialized");
                 instance.Puts(baseHeliType.ToString());
                 instance.Puts(baseHelicopter.GetType().ToString());
@@ -161,6 +163,7 @@ namespace Oxide.Plugins
                 switch (baseHeliType)
                 {
                     case HelicopterType.Mini:
+                        SpawnWings();
                         SpawnGuns();
                         break;
 
@@ -177,6 +180,7 @@ namespace Oxide.Plugins
                     if (storageContainer.inventory.itemList.Count == 0) canFireRockets = false;
                 }
                 catch { }
+
                 try
                 {
                     if (Time.time > nextActionTime)
@@ -189,13 +193,22 @@ namespace Oxide.Plugins
 
                 try
                 {
-                    if (leftTurret != null) { KeepFacingFront(leftTurret); }
-                }
-                catch { }
+                    switch (baseHeliType)
+                    {
+                        case HelicopterType.Mini:
+                            foreach (var turret in Turrets)
+                            {
+                                KeepFacingFrontMini(turret);
+                            }
+                            break;
 
-                try
-                {
-                    if (rightTurret != null) { KeepFacingFront(rightTurret); }
+                        case HelicopterType.Transport:
+                            foreach (var turret in Turrets)
+                            {
+                                KeepFacingFrontTransport(turret);
+                            }
+                            break;
+                    }
                 }
                 catch { }
 
@@ -205,8 +218,10 @@ namespace Oxide.Plugins
                 }
                 catch { }
             }
+
             public Dictionary<uint, string> spawnedEntityList = new Dictionary<uint, string>();
             public Dictionary<uint, BaseEntity> spawnedBaseEntityList = new Dictionary<uint, BaseEntity>();
+
             private void AddEntityToData(BaseEntity entity, Vector3 position)
             {
                 if (!spawnedEntityList.ContainsKey(entity.net.ID))
@@ -244,12 +259,61 @@ namespace Oxide.Plugins
                 {
                     FireTurretsGuns(player);
                 }
+                if (baseHelicopter.GetPlayerSeat(player) == 0 && inputState.IsDown(BUTTON.RELOAD))
+                {
+                    if (index == gunList.Count)
+                    {
+                        index = 0;
+                    }
+                    else
+                    {
+                        index++;
+                    }
+                    ChangeGun(index);
+                }
+            }
+
+            private void ChangeGun(int index)
+            {
+                gunList = new List<string>
+                {
+                    "ak47u.entity",
+                    "bolt_rifle.entity",
+                    "double_shotgun.entity",
+                    "l96.entity",
+                    "lr300.entity",
+                    "m249.entity",
+                    "m39.entity",
+                    "m92.entity",
+                    "mp5.entity",
+                    "shotgun_waterpipe.entity",
+                    "python.entity",
+                    "pistol_revolver.entity",
+                    "shotgun_pump.entity",
+                    "pistol_semiauto.entity",
+                    "semi_auto_rifle.entity",
+                    "smg.entity",
+                    "spas12.entity",
+                    "thompson.entity"
+                };
+
+                try
+                {
+                    ItemManager.CreateByName(gunList[index], 1).MoveToContainer(weaponRight1AT.inventory, 0);
+                    ItemManager.CreateByName(gunList[index], 1).MoveToContainer(weaponLeft1AT.inventory, 0);
+                    weaponRight1AT.UpdateAttachedWeapon();
+                    weaponLeft1AT.UpdateAttachedWeapon();
+                }
+                catch { }
             }
 
             internal void SpawnRockets()
             {
+                if (baseHelicopter == null) instance.Puts("Base heli is null");
+
                 float yAdjustment = -.01f;
-                //spawn wings
+
+                instance.PrintToChat("Spawning wings");
                 SpawnBaseEntity(new Vector3(3f, 1.15f + yAdjustment, 0f), new Vector3(0, 90, 90), baseHelicopter, "assets/bundled/prefabs/radtown/loot_barrel_1.prefab");
                 SpawnBaseEntity(new Vector3(-3f, 1.15f + yAdjustment, 0f), new Vector3(0, 90, 90), baseHelicopter, "assets/bundled/prefabs/radtown/loot_barrel_1.prefab");
 
@@ -259,39 +323,38 @@ namespace Oxide.Plugins
                 SpawnBaseEntity(new Vector3(2f, 1.5f, 0.5f), new Vector3(0f, 0f, 130f), baseHelicopter, "assets/bundled/prefabs/static/door.hinged.vent.prefab");
                 SpawnBaseEntity(new Vector3(-2f, 1.5f, 0.5f), new Vector3(0f, 0f, 230f), baseHelicopter, "assets/bundled/prefabs/static/door.hinged.vent.prefab");
 
-                //spawn guns 
                 float offset_left_x = -3.15f;
                 float offset_right_x = 2.85f;
                 float spread1 = 0.4f;
                 float spread2 = 0.4f;
                 float spread3 = 0.2f;
 
-                tube1L = SpawnArmamaent(new Vector3(-spread1 + offset_left_x, 1.4f, 1f), new Vector3(0, 277, 130), baseHelicopter);
-                tube2L = SpawnArmamaent(new Vector3(spread1 + offset_left_x, 1.4f, 1f), new Vector3(0, 277, 130), baseHelicopter);
-                tube3L = SpawnArmamaent(new Vector3(-spread2 + offset_left_x, 1.1f, 1f), new Vector3(0, 277, 130), baseHelicopter);
-                tube4L = SpawnArmamaent(new Vector3(spread2 + offset_left_x, 1.1f, 1f), new Vector3(0, 277, 130), baseHelicopter);
-                tube5L = SpawnArmamaent(new Vector3(-spread3 + offset_left_x, 0.85f, 1f), new Vector3(0, 277, 130), baseHelicopter);
+                TubesEntities = new List<BaseEntity>
+                {
+                    SpawnArmament(new Vector3(-spread1 + offset_left_x, 1.4f, 1f), new Vector3(0, 277, 130), baseHelicopter),
+                    SpawnArmament(new Vector3(spread1 + offset_left_x, 1.4f, 1f), new Vector3(0, 277, 130), baseHelicopter),
+                    SpawnArmament(new Vector3(-spread2 + offset_left_x, 1.1f, 1f), new Vector3(0, 277, 130), baseHelicopter),
+                    SpawnArmament(new Vector3(spread2 + offset_left_x, 1.1f, 1f), new Vector3(0, 277, 130), baseHelicopter),
+                    SpawnArmament(new Vector3(-spread3 + offset_left_x, 0.85f, 1f), new Vector3(0, 277, 130), baseHelicopter),
+                    SpawnArmament(new Vector3(spread3 + offset_left_x, 0.85f, 1f), new Vector3(0, 277, 130), baseHelicopter),
 
-                tube6L = SpawnArmamaent(new Vector3(spread3 + offset_left_x, 0.85f, 1f), new Vector3(0, 277, 130), baseHelicopter);
-                tube1R = SpawnArmamaent(new Vector3(-spread1 + offset_right_x, 1.4f, 1f), new Vector3(0, 277, 130), baseHelicopter);
-                tube2R = SpawnArmamaent(new Vector3(spread1 + offset_right_x, 1.4f, 1f), new Vector3(0, 277, 130), baseHelicopter);
-                tube3R = SpawnArmamaent(new Vector3(-spread2 + offset_right_x, 1.1f, 1f), new Vector3(0, 277, 130), baseHelicopter);
-                tube4R = SpawnArmamaent(new Vector3(spread2 + offset_right_x, 1.1f, 1f), new Vector3(0, 277, 130), baseHelicopter);
-                tube5R = SpawnArmamaent(new Vector3(-spread3 + offset_right_x, 0.85f, 1f), new Vector3(0, 277, 130), baseHelicopter);
-                tube6R = SpawnArmamaent(new Vector3(spread3 + offset_right_x, 0.85f, 1f), new Vector3(0, 277, 130), baseHelicopter);
+                    SpawnArmament(new Vector3(-spread1 + offset_right_x, 1.4f, 1f), new Vector3(0, 277, 130), baseHelicopter),
+                    SpawnArmament(new Vector3(spread1 + offset_right_x, 1.4f, 1f), new Vector3(0, 277, 130), baseHelicopter),
+                    SpawnArmament(new Vector3(-spread2 + offset_right_x, 1.1f, 1f), new Vector3(0, 277, 130), baseHelicopter),
+                    SpawnArmament(new Vector3(spread2 + offset_right_x, 1.1f, 1f), new Vector3(0, 277, 130), baseHelicopter),
+                    SpawnArmament(new Vector3(-spread3 + offset_right_x, 0.85f, 1f), new Vector3(0, 277, 130), baseHelicopter),
+                    SpawnArmament(new Vector3(spread3 + offset_right_x, 0.85f, 1f), new Vector3(0, 277, 130), baseHelicopter)
+                };
 
                 SpawnBaseEntity(new Vector3(-0.6f, 0.7f, -3.2f), new Vector3(0f, 90f, 40f), baseHelicopter, "assets/bundled/prefabs/static/door.hinged.industrial_a_h.prefab");
                 SpawnBaseEntity(new Vector3(0.6f, 2.5f, -1.7f), new Vector3(180f, 0f, 0f) + new Vector3(0f, 90f, -40f), baseHelicopter, "assets/bundled/prefabs/static/door.hinged.industrial_a_h.prefab");
 
-                try
-                {
-                    rightTurret = SpawnTurret(new Vector3(0f, 1.5f, -0.2f), new Vector3(0, 0, 90), wingRight);
-                    leftTurret = SpawnTurret(new Vector3(0f, 1.5f, -0.2f), new Vector3(0, 0, -90), wingLeft);
 
-                    rightTurret.UpdateFromInput(100, 1);
-                    leftTurret.UpdateFromInput(100, 1);
-                }
-                catch (Exception e) { instance.Puts($"Right Turret not spawned: {e}"); }
+                rightTurret = SpawnTurret(new Vector3(2f, 1.4f, 0.5f), new Vector3(180, 0, 0), baseHelicopter);
+                leftTurret = SpawnTurret(new Vector3(-2f, 1.4f, 0.5f), new Vector3(180, 0, 0), baseHelicopter);
+
+                rightTurret.UpdateFromInput(100, 1);
+                leftTurret.UpdateFromInput(100, 1);
 
                 turretsSpawned = true;
             }
@@ -299,42 +362,50 @@ namespace Oxide.Plugins
             private AutoTurret SpawnTurret(Vector3 position, Vector3 rotationEuler, BaseEntity parent)
             {
                 var entity = GameManager.server.CreateEntity("assets/prefabs/npc/autoturret/autoturret_deployed.prefab", this.position, this.rotation, true);
-                entity.transform.localEulerAngles = position;
-                entity.transform.localPosition = rotationEuler;
+                if (parent != null)
+                {
+                    entity.SetParent(parent, 0);
+                    entity.transform.localEulerAngles = rotationEuler;
+                    entity.transform.localPosition = position;
+                }
                 entity?.Spawn();
-                entity.SetParent(parent, 0);
+
                 AddEntityToData(entity, entity.transform.position);
                 entity.GetComponent<AutoTurret>().SetPeacekeepermode(true);
+                Turrets.Add(entity.GetComponent<AutoTurret>());
                 return entity.GetComponent<AutoTurret>();
             }
+
             private BaseEntity SpawnBaseEntity(Vector3 position, Vector3 rotationEuler, BaseEntity parent, string prefab)
             {
-                var entity = GameManager.server.CreateEntity(prefab, this.position, this.rotation, true);
-                entity.transform.localEulerAngles = position;
-                entity.transform.localPosition = rotationEuler;
+                var entity = GameManager.server.CreateEntity(prefab, baseHelicopter.transform.position, baseHelicopter.transform.rotation, true);
+
+
+                if (parent != null)
+                {
+                    entity.SetParent(parent, 0);
+                    entity.transform.localEulerAngles = rotationEuler;
+                    entity.transform.localPosition = position;
+                }
                 entity?.Spawn();
-                entity.SetParent(parent, 0);
                 AddEntityToData(entity, entity.transform.position);
+                instance.PrintToChat("Spawn Base Entity");
+                MakeDoorsInactive(entity);
+
                 return entity;
             }
-
             private void SpawnGuns()
             {
-                SpawnWings();
-
-                weaponRight1AT = SpawnTurret(new Vector3(0f, 1f, 0f), new Vector3(0, 0, 90), wingRight);
-                weaponRight2AT = SpawnTurret(new Vector3(0f, 2f, 0f), new Vector3(0, 0, 90), wingRight);
-                weaponLeft1AT = SpawnTurret(new Vector3(0f, 1f, 0f), new Vector3(0, 0, -90), wingLeft);
-                weaponLeft2AT = SpawnTurret(new Vector3(0f, 2f, 0f), new Vector3(0, 0, -90), wingLeft);
+                weaponRight1AT = SpawnTurret(new Vector3(1f, 0.5f, 0f), new Vector3(90, 0, 0), baseHelicopter);
+                weaponRight2AT = SpawnTurret(new Vector3(2f, 0.5f, 0f), new Vector3(90, 0, 0), baseHelicopter);
+                weaponLeft1AT = SpawnTurret(new Vector3(-1f, 0.5f, 0f), new Vector3(90, 0, 0), baseHelicopter);
+                weaponLeft2AT = SpawnTurret(new Vector3(-2f, 0.5f, 0f), new Vector3(90, 0, 0), baseHelicopter);
 
                 turretsSpawned = true;
                 PowerUp();
-
-                ItemManager.CreateByName("lmg.m249", 1).MoveToContainer(weaponRight1AT.inventory, 0);
-                weaponRight1AT.UpdateAttachedWeapon();
             }
 
-            private BaseEntity SpawnArmamaent(Vector3 position, Vector3 rotation, BaseEntity parent)
+            private BaseEntity SpawnArmament(Vector3 position, Vector3 rotation, BaseEntity parent)
             {
                 var entityParent = GameManager.server.CreateEntity("assets/prefabs/tools/pager/pager.entity.prefab", this.position, this.rotation, true);
                 entityParent.Spawn();
@@ -357,9 +428,6 @@ namespace Oxide.Plugins
             {
                 SpawnBaseEntity(new Vector3(-0.3f, 0.2f, 0f), new Vector3(90, 0, 90), baseHelicopter, "assets/prefabs/deployable/signs/sign.post.single.prefab");
                 SpawnBaseEntity(new Vector3(0.3f, 0.2f, 0f), new Vector3(90, 0, 270), baseHelicopter, "assets/prefabs/deployable/signs/sign.post.single.prefab");
-
-                SpawnBaseEntity(new Vector3(-0.3f, 1.2f, 0f), new Vector3(90, 0, 90), baseHelicopter, "assets/prefabs/deployable/signs/sign.post.single.prefab");
-                SpawnBaseEntity(new Vector3(0.3f, 1.2f, 0f), new Vector3(90, 0, 270), baseHelicopter, "assets/prefabs/deployable/signs/sign.post.single.prefab");
 
                 SpawnBaseEntity(new Vector3(-0.3f, 0.75f, 0f), new Vector3(90, 0, 90), baseHelicopter, "assets/prefabs/deployable/signs/sign.post.single.prefab");
                 SpawnBaseEntity(new Vector3(0.3f, 0.75f, 0f), new Vector3(90, 0, 270), baseHelicopter, "assets/prefabs/deployable/signs/sign.post.single.prefab");
@@ -389,14 +457,28 @@ namespace Oxide.Plugins
                 }
             }
 
-            private void KeepFacingFront(AutoTurret turret)
+            private void KeepFacingFrontMini(AutoTurret turret)
             {
                 try
                 {
                     if (turret != null && turret?.IsOnline() == true)
                     {
                         turret?.Reload();
-                        turret.aimDir = turret.transform.forward;
+                        turret.aimDir = turret.transform.up;
+                        turret?.SendAimDir();
+                        turret?.UpdateAiming();
+                    }
+                }
+                catch { }
+            }
+            private void KeepFacingFrontTransport(AutoTurret turret)
+            {
+                try
+                {
+                    if (turret != null && turret?.IsOnline() == true)
+                    {
+                        turret?.Reload();
+                        turret.aimDir = baseHelicopter.transform.forward;
                         turret?.SendAimDir();
                         turret?.UpdateAiming();
                     }
@@ -407,11 +489,14 @@ namespace Oxide.Plugins
             private void MakeDoorsInactive(BaseEntity entity)
             {
                 var door = entity.GetComponent<Door>();
-                door.canHandOpen = false;
-                door.canNpcOpen = false;
-                door.canTakeCloser = false;
-                door.canTakeKnocker = false;
-                door.canTakeLock = false;
+                if (door != null)
+                {
+                    door.canHandOpen = false;
+                    door.canNpcOpen = false;
+                    door.canTakeCloser = false;
+                    door.canTakeKnocker = false;
+                    door.canTakeLock = false;
+                }
             }
 
             private Vector3 GetDirection(float accuracy)
@@ -508,6 +593,8 @@ namespace Oxide.Plugins
             private AutoTurret weaponRight2AT;
             private AutoTurret weaponLeft1AT;
             private AutoTurret weaponLeft2AT;
+            private int index = 0;
+            private List<String> gunList = new List<string>();
 
             public void FireTurretsGuns(BasePlayer player)
             {
@@ -533,14 +620,6 @@ namespace Oxide.Plugins
                 catch { }
             }
         }
-        void OnPlayerInput(BasePlayer player, InputState input)
-        {
-            try
-            {
-                var copter = player.GetMountedVehicle().GetComponent<Armament>();
-                copter.HelicopterInput(input, player);
-            }
-            catch { }
-        }
+
     }
 }
