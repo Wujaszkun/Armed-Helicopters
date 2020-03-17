@@ -1,5 +1,6 @@
 using Facepunch;
 using Oxide.Core;
+using Oxide.Game.Rust.Cui;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -59,7 +60,6 @@ namespace Oxide.Plugins
                 ReloadCopterInformation();
                 ArmHelicopter();
             }
-
         }
 
         void OnEntityDeath(BaseCombatEntity entity, HitInfo info)
@@ -96,6 +96,24 @@ namespace Oxide.Plugins
                 copter.HelicopterInput(input, player);
             }
             catch { }
+        }
+
+        void OnEntityDismounted(BaseMountable entity, BasePlayer player)
+        {
+            PrintToChat("Dismounted");
+            if (!player.isMounted)
+            {
+                DestroyUI(player);
+            }
+        }
+
+        private void DestroyUI(BasePlayer player)
+        {
+            CuiHelper.DestroyUi(player, "Hud");
+
+            CuiHelper.DestroyUi(player, "pitch");
+            CuiHelper.DestroyUi(player, "roll");
+            CuiHelper.DestroyUi(player, "yaw");
         }
 
         class Armament : MonoBehaviour
@@ -142,7 +160,6 @@ namespace Oxide.Plugins
                 turretsSpawned = false;
                 SetType();
                 baseHelicopter = GetComponent<MiniCopter>();
-
                 lastShot = Time.time;
 
                 position = baseHelicopter.transform.position;
@@ -174,14 +191,27 @@ namespace Oxide.Plugins
                         SpawnRockets();
                         break;
                 }
+                ChangeGun(0);
             }
 
             void FixedUpdate()
             {
-                if (baseHelicopter.GetDriver() != null)
+
+                //instance.PrintToChat($"================");
+                //instance.PrintToChat($"Pitch: {NormalizeX().ToString("0.0")}");
+                //instance.PrintToChat($"Roll: {NormalizeZ().ToString("0.0")}");
+                //instance.PrintToChat($"Direction: {this.baseHelicopter.transform.rotation.eulerAngles.y.ToString()}");
+
+                ShowIU("Pitch: " + NormalizeX().ToString("0.0"), 
+                    "Roll: " + NormalizeZ().ToString("0.0"),
+                    "Yaw: " + this.baseHelicopter.transform.rotation.eulerAngles.y.ToString(), baseHelicopter.GetDriver());
+
+                try
                 {
-                    instance.PrintToChat(FindTarget(baseHelicopter.GetDriver()).ToString());
+                    ResetReloadTime();
                 }
+                catch { }
+
                 try
                 {
                     if (storageContainer.inventory.itemList.Count == 0) canFireRockets = false;
@@ -202,39 +232,70 @@ namespace Oxide.Plugins
                 {
                     switch (baseHeliType)
                     {
-
                         case HelicopterType.Mini:
-                            foreach (var turret in Turrets)
+                            try
                             {
-                                if (FindTarget(baseHelicopter.GetDriver()) != Vector3.zero)
+                                foreach (var turret in Turrets)
                                 {
-                                    KeepFacingFrontMini(turret, FindTarget(baseHelicopter.GetDriver()) - turret.muzzlePos.position);
+                                    if (FindTarget(baseHelicopter.GetDriver()) != Vector3.zero)
+                                    {
+                                        KeepFacingFrontMini(turret, FindTarget(baseHelicopter.GetDriver()) - turret.muzzlePos.position);
+                                    }
+                                    else
+                                    {
+                                        KeepFacingFrontMini(turret, baseHelicopter.transform.forward);
+                                    }
                                 }
-                                else
-                                {
-                                    KeepFacingFrontMini(turret, baseHelicopter.transform.forward);
-                                }
-
                             }
+                            catch { }
                             break;
 
                         case HelicopterType.Transport:
-                            foreach (var turret in Turrets)
+                            try
                             {
-                                KeepFacingFrontTransport(turret);
+                                foreach (var turret in Turrets)
+                                {
+                                    KeepFacingFrontTransport(turret);
+                                }
                             }
+                            catch { }
                             break;
-
                     }
                 }
                 catch { instance.Puts("Eyes not working"); }
-
 
                 try
                 {
                     ResetAmmo();
                 }
                 catch { }
+            }
+
+            private float NormalizeX()
+            {
+                var x = this.baseHelicopter.transform.rotation.eulerAngles.x;
+                if (x < 90) x = -x;
+                if (x > 270) x = 360 - x;
+                return x;
+            }
+            private float NormalizeZ()
+            {
+                var z = this.baseHelicopter.transform.rotation.eulerAngles.z;
+                if (z < 90) z = -z;
+                if (z > 270) z = 360 - z;
+                return z;
+            }
+            private void ResetReloadTime()
+            {
+                if (!canGunShoot)
+                {
+                    instance.PrintToChat((nextShootTime - Time.time).ToString());
+                }
+
+                if (!canGunShoot && Time.time >= nextShootTime)
+                {
+                    canGunShoot = true;
+                }
             }
 
             public Dictionary<uint, string> spawnedEntityList = new Dictionary<uint, string>();
@@ -246,6 +307,7 @@ namespace Oxide.Plugins
                 {
                     spawnedEntityList.Add(entity.net.ID, entity.ShortPrefabName);
                 }
+
                 if (!spawnedBaseEntityList.ContainsKey(entity.net.ID))
                 {
                     spawnedBaseEntityList.Add(entity.net.ID, entity);
@@ -260,6 +322,7 @@ namespace Oxide.Plugins
                         entity.Value.Kill();
                         spawnedEntityList.Remove(entity.Key);
                     }
+
                     catch (Exception e)
                     {
                         instance.Puts("Couldn't delete entity " + entity.Key + " " + e.ToString());
@@ -274,10 +337,12 @@ namespace Oxide.Plugins
                     //FireTurretsRockets(player);
                     FireTurretsGuns(player);
                 }
+
                 if (baseHelicopter.GetPlayerSeat(player) == 0 && inputState.IsDown(BUTTON.FIRE_SECONDARY))
                 {
                     //FireTurretsGuns(player);
                 }
+
                 if (baseHelicopter.GetPlayerSeat(player) == 0 && inputState.WasJustPressed(BUTTON.RELOAD))
                 {
                     if (index == gunList.Count)
@@ -288,7 +353,6 @@ namespace Oxide.Plugins
                     {
                         index++;
                     }
-                    instance.PrintToChat("pressed R");
                     ChangeGun(index);
                 }
             }
@@ -298,8 +362,8 @@ namespace Oxide.Plugins
                 gunList = new Dictionary<string, string>();
 
                 gunList.Add("rifle.ak", "ammo.rifle");
-                gunList.Add("rifle.bolt", "ammo.rifle");
-                gunList.Add("rifle.l96", "ammo.rifle");
+                gunList.Add("rifle.bolt", "ammo.rifle.hv");
+                gunList.Add("rifle.l96", "ammo.rifle.hv");
                 gunList.Add("rifle.lr300", "ammo.rifle");
                 gunList.Add("lmg.m249", "ammo.rifle");
                 gunList.Add("rifle.m39", "ammo.rifle");
@@ -311,10 +375,9 @@ namespace Oxide.Plugins
                 gunList.Add("smg.2", "ammo.pistol");
                 gunList.Add("smg.thompson", "ammo.pistol");
 
-                gunList.Add("shotgun.double", "ammo.shotgun");
-                gunList.Add("shotgun.waterpipe", "ammo.shotgun");
+                gunList.Add("shotgun.double", "ammo.shotgun.fire");
                 gunList.Add("shotgun.pump", "ammo.shotgun");
-                gunList.Add("shotgun.spas12", "ammo.shotgun");
+                gunList.Add("shotgun.spas12", "ammo.shotgun.slug");
 
                 try
                 {
@@ -325,7 +388,6 @@ namespace Oxide.Plugins
                         ItemManager.CreateByName(gunList.ElementAt(index).Value, 1000).MoveToContainer(turret.inventory, 1);
                         turret.UpdateAttachedWeapon();
                         turret.Reload();
-                        instance.PrintToChat($"Weapon: {ItemManager.FindItemDefinition(gunList.ElementAt(index).Key).displayName.english}");
                     }
                 }
                 catch (Exception e)
@@ -340,7 +402,6 @@ namespace Oxide.Plugins
 
                 float yAdjustment = -.01f;
 
-                instance.PrintToChat("Spawning wings");
                 SpawnBaseEntity(new Vector3(3f, 1.15f + yAdjustment, 0f), new Vector3(0, 90, 90), baseHelicopter, "assets/bundled/prefabs/radtown/loot_barrel_1.prefab");
                 SpawnBaseEntity(new Vector3(-3f, 1.15f + yAdjustment, 0f), new Vector3(0, 90, 90), baseHelicopter, "assets/bundled/prefabs/radtown/loot_barrel_1.prefab");
 
@@ -381,7 +442,6 @@ namespace Oxide.Plugins
                     SpawnTurret(new Vector3(2f, 1.4f, 0.5f), new Vector3(180, 0, 0), baseHelicopter),
                     SpawnTurret(new Vector3(-2f, 1.4f, 0.5f), new Vector3(180, 0, 0), baseHelicopter)
                 };
-
                 PowerUp();
 
                 turretsSpawned = true;
@@ -416,7 +476,6 @@ namespace Oxide.Plugins
                 }
                 entity?.Spawn();
                 AddEntityToData(entity, entity.transform.position);
-                instance.PrintToChat("Spawn Base Entity");
                 MakeDoorsInactive(entity);
 
                 return entity;
@@ -429,6 +488,7 @@ namespace Oxide.Plugins
                     SpawnTurret(new Vector3(-1f, 0.5f, 0f), new Vector3(90, 0, 0), baseHelicopter),
                     SpawnTurret(new Vector3(-2f, 0.5f, 0f), new Vector3(90, 0, 0), baseHelicopter)
                 };
+
                 turretsSpawned = true;
                 PowerUp();
             }
@@ -491,8 +551,6 @@ namespace Oxide.Plugins
                 {
                     if (turret != null && turret?.IsOnline() == true)
                     {
-                        //turret?.Reload();
-                        //turret.aimDir = turret.transform.up;
                         turret.aimDir = target;
                         turret?.SendAimDir();
                         turret?.UpdateAiming();
@@ -619,12 +677,10 @@ namespace Oxide.Plugins
             }
 
             private Vector3 target;
-            private AutoTurret weaponRight1AT;
-            private AutoTurret weaponRight2AT;
-            private AutoTurret weaponLeft1AT;
-            private AutoTurret weaponLeft2AT;
             private int index = 0;
-
+            private float nextShootTime;
+            private bool canGunShoot = true;
+            private CuiElementContainer elementContainer;
 
             public void FireTurretsGuns(BasePlayer player)
             {
@@ -632,16 +688,65 @@ namespace Oxide.Plugins
                 {
                     foreach (var turret in Turrets)
                     {
-                        if (turret.IsOnline() == true)
+                        if (turret.IsOnline() == true && canGunShoot)
                         {
-                            //turret.Reload();
+                            if (turret.GetAttachedWeapon().AmmoFraction() <= 0)
+                            {
+                                nextShootTime = Time.time + turret.GetAttachedWeapon().GetReloadDuration();
+                                foreach (var turretToReload in Turrets)
+                                {
+                                    turretToReload.GetAttachedWeapon().TopUpAmmo();
+                                }
+                                canGunShoot = false;
+                            }
                             turret.FireAttachedGun(target, ConVar.PatrolHelicopter.bulletAccuracy);
                         }
                     }
                 }
-                catch { }
+                catch (Exception e) { instance.Puts($"FireTurretsGuns: {e.Message}"); };
+            }
+
+
+
+            private void ShowIU(string pitchValue, string rollValue, string yawValue, BasePlayer player)
+            {
+                var color = "0 0 255 1";
+                var fontSize = 24;
+                var align = TextAnchor.MiddleCenter;
+
+                DestroyUi(player);
+
+                CuiElementContainer indicators = new CuiElementContainer();
+
+                indicators.Add(new CuiLabel
+                {
+                    Text = { Color = color, FontSize = fontSize, Align = align, Text = pitchValue },
+                    RectTransform = { AnchorMin = "0.30 0.10", AnchorMax = "0.50 0.50" }
+                }, "Hud", "pitch");
+
+                indicators.Add(new CuiLabel
+                {
+                    Text = { Color = color, FontSize = fontSize, Align = align, Text = rollValue },
+                    RectTransform = { AnchorMin = "0.10 0.10", AnchorMax = "0.30 0.50" }
+                }, "Hud", "roll");
+
+                indicators.Add(new CuiLabel
+                {
+                    Text = { Color = color, FontSize = fontSize, Align = align, Text = yawValue },
+                    RectTransform = { AnchorMin = "0.20 0.10", AnchorMax = "0.4 0.50" }
+                }, "Hud", "yaw");
+
+                CuiHelper.AddUi(player, indicators);
+            }
+
+            public void DestroyUi(BasePlayer player)
+            {
+                CuiHelper.DestroyUi(player, "Hud");
+
+                CuiHelper.DestroyUi(player, "pitch");
+                CuiHelper.DestroyUi(player, "roll");
+                CuiHelper.DestroyUi(player, "yaw");
             }
         }
-
     }
 }
