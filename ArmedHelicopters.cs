@@ -1,4 +1,4 @@
-using Facepunch;
+﻿using Facepunch;
 using Oxide.Core;
 using Oxide.Game.Rust.Cui;
 using System;
@@ -114,6 +114,8 @@ namespace Oxide.Plugins
             CuiHelper.DestroyUi(player, "pitch");
             CuiHelper.DestroyUi(player, "roll");
             CuiHelper.DestroyUi(player, "yaw");
+
+            CuiHelper.DestroyUi(player, "crosshair");
         }
 
         class Armament : MonoBehaviour
@@ -204,7 +206,9 @@ namespace Oxide.Plugins
 
                 ShowIU("Pitch: " + NormalizeX().ToString("0.0"), 
                     "Roll: " + NormalizeZ().ToString("0.0"),
-                    "Yaw: " + this.baseHelicopter.transform.rotation.eulerAngles.y.ToString(), baseHelicopter.GetDriver());
+                    "Yaw: " + this.baseHelicopter.transform.rotation.eulerAngles.y.ToString(), 
+                    baseHelicopter.GetDriver(),
+                    GetCrosshairSize());
 
                 try
                 {
@@ -681,6 +685,7 @@ namespace Oxide.Plugins
             private float nextShootTime;
             private bool canGunShoot = true;
             private CuiElementContainer elementContainer;
+            private Dictionary<string, int> crossSize;
 
             public void FireTurretsGuns(BasePlayer player)
             {
@@ -706,13 +711,12 @@ namespace Oxide.Plugins
                 catch (Exception e) { instance.Puts($"FireTurretsGuns: {e.Message}"); };
             }
 
-
-
-            private void ShowIU(string pitchValue, string rollValue, string yawValue, BasePlayer player)
+            private void ShowIU(string pitchValue, string rollValue, string yawValue, BasePlayer player, int cSize)
             {
-                var color = "0 0 255 1";
+                var color = "0 255 0 1";
                 var fontSize = 24;
                 var align = TextAnchor.MiddleCenter;
+
 
                 DestroyUi(player);
 
@@ -736,7 +740,43 @@ namespace Oxide.Plugins
                     RectTransform = { AnchorMin = "0.20 0.10", AnchorMax = "0.4 0.50" }
                 }, "Hud", "yaw");
 
+                instance.PrintToChat(Interface.Oxide.DataDirectory.ToString());
+
+                indicators.Add(new CuiLabel
+                {
+                    Text = { Color = color, FontSize = cSize , Align = align, Text = "◎" },
+                    RectTransform = { AnchorMin = "0.28 0.27", AnchorMax = "0.72 0.73" }, 
+                }, "Hud", "crosshair");
+
+
                 CuiHelper.AddUi(player, indicators);
+            }
+
+            private int GetCrosshairSize()
+            {
+                var currentWeapon = gunList.ElementAt(index).Key;
+
+                crossSize = new Dictionary<string, int>();
+
+                crossSize.Add("rifle.ak", 72);
+                crossSize.Add("rifle.bolt", 30);
+                crossSize.Add("rifle.l96", 30);
+                crossSize.Add("rifle.lr300", 72);
+                crossSize.Add("lmg.m249", 100);
+                crossSize.Add("rifle.m39", 36);
+                crossSize.Add("pistol.m92", 48);
+                crossSize.Add("smg.mp5",64);
+                crossSize.Add("pistol.python", 48);
+                crossSize.Add("pistol.revolver", 48);
+                crossSize.Add("pistol.semiauto", 48);
+                crossSize.Add("smg.2", 64);
+                crossSize.Add("smg.thompson", 64);
+
+                crossSize.Add("shotgun.double", 240);
+                crossSize.Add("shotgun.pump", 240);
+                crossSize.Add("shotgun.spas12", 72);
+
+                return crossSize[currentWeapon];
             }
 
             public void DestroyUi(BasePlayer player)
@@ -746,6 +786,7 @@ namespace Oxide.Plugins
                 CuiHelper.DestroyUi(player, "pitch");
                 CuiHelper.DestroyUi(player, "roll");
                 CuiHelper.DestroyUi(player, "yaw");
+                CuiHelper.DestroyUi(player, "crosshair");
             }
         }
     }
