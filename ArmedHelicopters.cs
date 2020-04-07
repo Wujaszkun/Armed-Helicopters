@@ -1,5 +1,3 @@
-﻿using Facepunch;
-using Oxide.Core;
 using Oxide.Game.Rust.Cui;
 using System;
 using System.Collections.Generic;
@@ -8,18 +6,28 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Armed Helicopters", "Wujaszkun", "0.2.5")]
+    [Info("Armed Helicopters", "Wujaszkun", "2.1.1")]
     [Description("Armament for scrap transport helicopter and Minicopter")]
-    class ArmedHelicopters : RustPlugin
+    internal class ArmedHelicopters : RustPlugin
     {
         public static ArmedHelicopters instance;
         public ScrapTransportHelicopter copter;
-        private List<Armament> armamentList = new List<Armament>();
         private List<MiniCopter> helicopterList = new List<MiniCopter>();
-        private bool isLoggingEnabled = true;
+        private readonly bool isLoggingEnabled = true;
+        public CuiElementContainer hLines = new CuiElementContainer();
+        private CuiElementContainer mainIndicators = new CuiElementContainer();
+        private CuiElementContainer crosshair = new CuiElementContainer();
+        private CuiElementContainer currentWeapon = new CuiElementContainer();
+        private CuiElementContainer ammoCount = new CuiElementContainer();
+        private CuiElementContainer rocketCount = new CuiElementContainer();
+        private CuiElementContainer speedIndicators = new CuiElementContainer();
+        private CuiElementContainer heightIndicators = new CuiElementContainer();
+        private CuiElementContainer lines = new CuiElementContainer();
+
+        private bool verticalLineShow = true;
 
         [ChatCommand("armtransportcopter")]
-        void ArmTransportCopters(BasePlayer player, string command, string[] args)
+        private void ArmTransportCopters(BasePlayer player, string command, string[] args)
         {
             if (player.IsAdmin)
             {
@@ -28,16 +36,25 @@ namespace Oxide.Plugins
             }
         }
 
-        void OnServerInitialized()
+        private void OnServerInitialized()
         {
+            Puts("PluginInit");
             instance = this;
             ReloadCopterInformation();
             ArmHelicopter();
         }
 
-        void Unload()
+        private void Unload()
         {
-            foreach (var copter in GameObject.FindObjectsOfType<Armament>())
+            Puts("Unload");
+            foreach (BasePlayer player in BasePlayer.allPlayerList)
+            {
+                DestroyUI(player);
+            }
+
+            var armedCopters = GameObject.FindObjectsOfType<Armament>();
+
+            foreach (Armament copter in armedCopters)
             {
                 if (copter != null)
                 {
@@ -45,15 +62,16 @@ namespace Oxide.Plugins
                     GameObject.Destroy(copter);
                 }
             }
+
+            instance.verticalLineShow = true;
         }
 
         private void ReloadCopterInformation()
         {
             helicopterList = new List<MiniCopter>(GameObject.FindObjectsOfType<MiniCopter>());
-            armamentList = new List<Armament>(GameObject.FindObjectsOfType<Armament>());
         }
 
-        void OnEntitySpawned(BaseNetworkable entity)
+        private void OnEntitySpawned(BaseNetworkable entity)
         {
             if (entity.gameObject.GetComponent<MiniCopter>() != null)
             {
@@ -62,11 +80,18 @@ namespace Oxide.Plugins
             }
         }
 
-        void OnEntityDeath(BaseCombatEntity entity, HitInfo info)
+        private void OnEntityDeath(BaseCombatEntity entity, HitInfo info)
         {
             ReloadCopterInformation();
 
-
+            if (entity.gameObject.GetComponent<Armament>() != null)
+            {
+                instance.PrintToChat("Item dropped");
+                if (entity.gameObject.GetComponent<MiniCopter>().GetDriver() != null)
+                {
+                    DestroyUI(entity.gameObject.GetComponent<MiniCopter>().GetDriver());
+                }
+            }
         }
 
         private void Log(string message)
@@ -79,7 +104,7 @@ namespace Oxide.Plugins
 
         private void ArmHelicopter()
         {
-            foreach (var heliBaseEnt in helicopterList)
+            foreach (MiniCopter heliBaseEnt in helicopterList)
             {
                 if (heliBaseEnt.GetComponent<MiniCopter>() != null && heliBaseEnt.GetComponent<Armament>() == null)
                 {
@@ -88,69 +113,79 @@ namespace Oxide.Plugins
             }
         }
 
-        void OnPlayerInput(BasePlayer player, InputState input)
+        private void OnPlayerInput(BasePlayer player, InputState input)
         {
             try
             {
-                var copter = player.GetMountedVehicle().GetComponent<Armament>();
+                Armament copter = player.GetMountedVehicle().GetComponent<Armament>();
                 copter.HelicopterInput(input, player);
             }
             catch { }
         }
 
-        void OnEntityDismounted(BaseMountable entity, BasePlayer player)
+        private void OnEntityDismounted(BaseMountable entity, BasePlayer player)
         {
-            PrintToChat("Dismounted");
             if (!player.isMounted)
             {
+                instance.verticalLineShow = true;
                 DestroyUI(player);
             }
         }
 
-        private void DestroyUI(BasePlayer player)
-        {
-            CuiHelper.DestroyUi(player, "Hud");
-
-            CuiHelper.DestroyUi(player, "pitch");
-            CuiHelper.DestroyUi(player, "roll");
-            CuiHelper.DestroyUi(player, "yaw");
-
-            CuiHelper.DestroyUi(player, "crosshair");
-        }
-
-        class Armament : MonoBehaviour
+        private class Armament : MonoBehaviour
         {
             private static HelicopterType baseHeliType;
             private MiniCopter baseHelicopter;
 
-
             private Vector3 position;
             private Quaternion rotation;
 
-            private BaseEntity wingLeft;
-            private BaseEntity wingRight;
+            private bool canFireRockets = true;
+            private readonly List<Vector3> Tubes = new List<Vector3>();
+            private List<BaseEntity> TubesEntities = new List<BaseEntity>();
+            private readonly List<BaseEntity> TubesParents = new List<BaseEntity>();
 
-
-            private AutoTurret leftTurret = new AutoTurret();
-            private AutoTurret rightTurret = new AutoTurret();
-            private bool turretsSpawned;
-
-            List<Vector3> Tubes = new List<Vector3>();
-            List<BaseEntity> TubesEntities = new List<BaseEntity>();
-            List<BaseEntity> TubesParents = new List<BaseEntity>();
-            List<AutoTurret> Turrets = new List<AutoTurret>();
             private int currentTubeIndex;
-            private BaseEntity backDoor;
-            private StorageContainer storageContainer;
-
-            private bool canFireRockets;
             private float nextActionTime;
-            private float period = 1;
+            private readonly float period = 1;
 
             private float lastShot;
 
-            private Dictionary<string, string> gunList = new Dictionary<string, string>();
+            private AutoTurret turret1;
+            private AutoTurret turret2;
+            private AutoTurret turret3;
+            private AutoTurret turret4;
 
+            public Dictionary<uint, string> spawnedEntityList = new Dictionary<uint, string>();
+            public Dictionary<uint, BaseEntity> spawnedBaseEntityList = new Dictionary<uint, BaseEntity>();
+            private int numberOfRockets = 12;
+
+            private Vector3 target;
+            private int index = 0;
+            private float nextShootTime;
+
+            private bool canGunShoot = true;
+
+            private float timeReloadGuns;
+            private float timeReloadRockets;
+
+            private float nextShootTimeRockets;
+
+            private CuiElementContainer hLinesHeli = new CuiElementContainer();
+            private Vector3 lastPosition = Vector3.zero;
+
+            private int turretsCount;
+            private List<Gun> gunList = new List<Gun>();
+            private int previousCrosshairSize = 0;
+            private string previousWeapon;
+            private string previousAmmoCount;
+            private int previousNUmberOfRockets;
+            private float previousSpeedText;
+            private float previousHValue;
+            private float nextShootTimeGuns;
+            private int showHUD = 0;
+
+            #region Common
             private enum HelicopterType
             {
                 Transport,
@@ -159,27 +194,57 @@ namespace Oxide.Plugins
 
             private void Awake()
             {
-                turretsSpawned = false;
+                InitGunList();
+                instance.Puts($"Guns listed: {gunList.Count}");
+
                 SetType();
-                baseHelicopter = GetComponent<MiniCopter>();
-                lastShot = Time.time;
+                instance.Puts($"Helicopter type: {baseHeliType}");
+
+                baseHelicopter = this.gameObject.GetComponent<MiniCopter>();
+                instance.Puts($"Base helicopter name: {baseHelicopter.name}");
 
                 position = baseHelicopter.transform.position;
                 rotation = baseHelicopter.transform.rotation;
+                instance.Puts($"Base helicopter position: {position}");
+                instance.Puts($"Base helicopter rotation: {rotation}");
+
+                lastShot = Time.time;
 
                 SpawnArmament();
 
                 currentTubeIndex = 0;
-                ChangeGun(index);
+                ChangeGun();
                 instance.Puts("Initialized");
-                instance.Puts(baseHeliType.ToString());
-                instance.Puts(baseHelicopter.GetType().ToString());
+            }
+
+            private void InitGunList()
+            {
+                gunList = new List<Gun>
+                {
+                    new Gun("AK Automatic Rifle","rifle.ak" ,"ammo.rifle", 72),
+                    new Gun("Bolt Action Rifle","rifle.bolt" ,"ammo.rifle.hv", 30),
+                    new Gun("L96 Sniper Rifle","rifle.l96" ,"ammo.rifle.hv", 30),
+                    new Gun("LR300 Automatic Rfile","rifle.lr300" ,"ammo.rifle", 72),
+                    new Gun("M249 Machinegun","lmg.m249" ,"ammo.rifle" , 100),
+                    new Gun("M39 DMR" ,"rifle.m39" ,"ammo.rifle.hv" , 36),
+                    new Gun("M92 Pistol","pistol.m92" ,"ammo.pistol", 48),
+                    new Gun("MP5 Machine Pistol","smg.mp5" ,"ammo.pistol", 64),
+                    new Gun("Python Revolver" ,"pistol.python" ,"ammo.pistol", 48),
+                    new Gun("Revolver","pistol.revolver" ,"ammo.pistol", 48),
+                    new Gun("Semiauto Pistol","pistol.semiauto" ,"ammo.pistol", 48),
+                    new Gun("Custom Machine Pistol","smg.2" ,"ammo.pistol", 64),
+                    new Gun("Thompson Machine Pistol","smg.thompson","ammo.pistol", 64),
+                    new Gun("Double Barrel Shotgun","shotgun.double","ammo.shotgun.fire", 240),
+                    new Gun("Pump Action Shotgun","shotgun.pump","ammo.shotgun", 240),
+                    new Gun("Spas 12 Shotgun" ,"shotgun.spas12","ammo.shotgun.slug", 72)
+                };
             }
 
             private void SetType()
             {
-                baseHeliType = GetComponent<ScrapTransportHelicopter>() != null ? HelicopterType.Transport : HelicopterType.Mini;
+                baseHeliType = this.gameObject.name.Contains("transport") ? HelicopterType.Transport : HelicopterType.Mini;
             }
+
             private void SpawnArmament()
             {
                 switch (baseHeliType)
@@ -193,117 +258,167 @@ namespace Oxide.Plugins
                         SpawnRockets();
                         break;
                 }
-                ChangeGun(0);
+                ChangeGun();
             }
 
-            void FixedUpdate()
+            private void FixedUpdate()
             {
 
-                //instance.PrintToChat($"================");
-                //instance.PrintToChat($"Pitch: {NormalizeX().ToString("0.0")}");
-                //instance.PrintToChat($"Roll: {NormalizeZ().ToString("0.0")}");
-                //instance.PrintToChat($"Direction: {this.baseHelicopter.transform.rotation.eulerAngles.y.ToString()}");
-
-                ShowIU("Pitch: " + NormalizeX().ToString("0.0"), 
-                    "Roll: " + NormalizeZ().ToString("0.0"),
-                    "Yaw: " + this.baseHelicopter.transform.rotation.eulerAngles.y.ToString(), 
-                    baseHelicopter.GetDriver(),
-                    GetCrosshairSize());
-
-                try
+                if (baseHelicopter.GetDriver() != null)
                 {
-                    ResetReloadTime();
-                }
-                catch { }
 
-                try
-                {
-                    if (storageContainer.inventory.itemList.Count == 0) canFireRockets = false;
-                }
-                catch { }
+                    var driver = baseHelicopter.GetDriver();
+                    showHUDMethod(driver);
 
-                try
-                {
-                    if (Time.time > nextActionTime)
-                    {
-                        nextActionTime = Time.time + period;
-                        if (storageContainer.inventory.itemList.Count > 0) canFireRockets = true;
-                    }
-                }
-                catch { }
-
-                try
-                {
                     switch (baseHeliType)
                     {
                         case HelicopterType.Mini:
-                            try
-                            {
-                                foreach (var turret in Turrets)
-                                {
-                                    if (FindTarget(baseHelicopter.GetDriver()) != Vector3.zero)
-                                    {
-                                        KeepFacingFrontMini(turret, FindTarget(baseHelicopter.GetDriver()) - turret.muzzlePos.position);
-                                    }
-                                    else
-                                    {
-                                        KeepFacingFrontMini(turret, baseHelicopter.transform.forward);
-                                    }
-                                }
-                            }
-                            catch { }
+                            KeepTurretsFacingFront(turret1);
+                            KeepTurretsFacingFront(turret2);
+                            KeepTurretsFacingFront(turret3);
+                            KeepTurretsFacingFront(turret4);
+                            turret1.SetTarget(null);
+                            turret2.SetTarget(null);
+                            turret3.SetTarget(null);
+                            turret4.SetTarget(null);
                             break;
 
                         case HelicopterType.Transport:
-                            try
-                            {
-                                foreach (var turret in Turrets)
-                                {
-                                    KeepFacingFrontTransport(turret);
-                                }
-                            }
-                            catch { }
+                            KeepTurretsFacingFront(turret1);
+                            KeepTurretsFacingFront(turret2);
+                            turret1.SetTarget(null);
+                            turret2.SetTarget(null);
+
+                            ResetAmmo();
                             break;
                     }
+                    SetCanShootGuns();
+                    SetCanShootRockets();
                 }
-                catch { instance.Puts("Eyes not working"); }
+            }
 
-                try
+            private void showHUDMethod(BasePlayer driver)
+            {
+                if (baseHeliType == HelicopterType.Transport)
                 {
-                    ResetAmmo();
+                    ShowUICrosshair(driver, 72);
+                    ShowUIRocketCount(driver);
                 }
-                catch { }
+                if (baseHeliType == HelicopterType.Mini)
+                {
+                    ShowUICrosshair(driver, GetCrosshairSize());
+                    ShowUIAmmoCount(driver, $"Ammo Count: {GetTurretAmmoCount()}");
+                    ShowUICurrentWeapon(driver, $"Current Weapon: {GetCurrentWeaponName()}");
+                }
+
+                ShowRollLinesUI(driver, NormalizeZ(), NormalizeX());
+                ShowSpeedUI(driver);
+                ShowHeightUI(driver);
+                instance.verticalLineShow = false;
+            }
+
+            private void KeepTurretsFacingFront(AutoTurret turret)
+            {
+                if (baseHelicopter.GetDriver() != null)
+                {
+                    if (FindTarget(baseHelicopter.GetDriver()) != Vector3.zero)
+                    {
+                        KeepFacingFrontMini(turret, FindTarget(baseHelicopter.GetDriver()) - turret.muzzlePos.position);
+                    }
+                    else
+                    {
+                        KeepFacingFrontMini(turret, baseHelicopter.transform.forward);
+                    }
+                }
+            }
+
+            private object GetTurretAmmoCount()
+            {
+                string result;
+                string ammoType0 = turret1.GetAttachedWeapon().primaryMagazine.ammoType.shortname;
+                int ammoAmount0 = turret1.GetAttachedWeapon().primaryMagazine.contents;
+
+                if (IsReloading())
+                {
+                    result = $"Reloading ({(nextShootTime - Time.time).ToString("0.0")} seconds).";
+                }
+                else
+                {
+                    result = $"{ammoAmount0} {ammoType0}";
+                }
+
+                return result;
+
+            }
+            private bool IsReloading()
+            {
+                if (nextShootTime - Time.time > 0)
+                {
+                    return true;
+                }
+                else
+                {
+                    return false;
+                }
             }
 
             private float NormalizeX()
             {
-                var x = this.baseHelicopter.transform.rotation.eulerAngles.x;
-                if (x < 90) x = -x;
-                if (x > 270) x = 360 - x;
+                float x = baseHelicopter.transform.rotation.eulerAngles.x;
+
+                if (x < 90)
+                {
+                    x = -x;
+                }
+
+                if (x > 270)
+                {
+                    x = 360 - x;
+                }
+
                 return x;
             }
             private float NormalizeZ()
             {
-                var z = this.baseHelicopter.transform.rotation.eulerAngles.z;
-                if (z < 90) z = -z;
-                if (z > 270) z = 360 - z;
+                float z = baseHelicopter.transform.rotation.eulerAngles.z;
+
+                if (z < 90)
+                {
+                    z = -z;
+                }
+
+                if (z > 270)
+                {
+                    z = 360 - z;
+                }
+
                 return z;
             }
-            private void ResetReloadTime()
+            private void SetCanShootRockets()
+            {
+                if (numberOfRockets < 1)
+                {
+                    canFireRockets = false;
+                }
+
+                if (numberOfRockets > 0)
+                {
+                    canFireRockets = true;
+                }
+            }
+
+            private void SetCanShootGuns()
             {
                 if (!canGunShoot)
                 {
-                    instance.PrintToChat((nextShootTime - Time.time).ToString());
+                    timeReloadGuns = nextShootTimeGuns - Time.time;
                 }
 
-                if (!canGunShoot && Time.time >= nextShootTime)
+                if (!canGunShoot && Time.time >= nextShootTimeGuns)
                 {
                     canGunShoot = true;
                 }
             }
-
-            public Dictionary<uint, string> spawnedEntityList = new Dictionary<uint, string>();
-            public Dictionary<uint, BaseEntity> spawnedBaseEntityList = new Dictionary<uint, BaseEntity>();
 
             private void AddEntityToData(BaseEntity entity, Vector3 position)
             {
@@ -317,9 +432,10 @@ namespace Oxide.Plugins
                     spawnedBaseEntityList.Add(entity.net.ID, entity);
                 }
             }
+
             public void DespawnAllEntities()
             {
-                foreach (var entity in spawnedBaseEntityList)
+                foreach (KeyValuePair<uint, BaseEntity> entity in spawnedBaseEntityList)
                 {
                     try
                     {
@@ -333,23 +449,78 @@ namespace Oxide.Plugins
                     }
                 }
             }
+            private AutoTurret SpawnTurret(Vector3 position, Vector3 rotationEuler, BaseEntity parent)
+            {
+                BaseEntity entity = GameManager.server.CreateEntity("assets/prefabs/npc/autoturret/autoturret_deployed.prefab", this.position, rotation, true);
+                if (parent != null)
+                {
+                    entity.SetParent(parent, 0);
+                    entity.transform.localEulerAngles = rotationEuler;
+                    entity.transform.localPosition = position;
+                }
+                entity?.Spawn();
+
+                var turret = entity.GetComponent<AutoTurret>();
+                turret.SetPeacekeepermode(true);
+                turret.InitializeControl(null);
+                turret.UpdateFromInput(100, 0);
+
+                AddEntityToData(entity, entity.transform.position);
+
+                return turret;
+            }
+
+            private BaseEntity SpawnBaseEntity(Vector3 position, Vector3 rotationEuler, BaseEntity parent, string prefab)
+            {
+                BaseEntity entity = GameManager.server.CreateEntity(prefab, baseHelicopter.transform.position, baseHelicopter.transform.rotation, true);
+
+                if (parent != null)
+                {
+                    entity.SetParent(parent, 0);
+                    entity.transform.localEulerAngles = rotationEuler;
+                    entity.transform.localPosition = position;
+                }
+                entity?.Spawn();
+                AddEntityToData(entity, entity.transform.position);
+                MakeDoorsInactive(entity);
+
+                return entity;
+            }
 
             public void HelicopterInput(InputState inputState, BasePlayer player)
             {
-                if (baseHelicopter.GetPlayerSeat(player) == 0 && inputState.IsDown(BUTTON.FIRE_PRIMARY))
+                if (baseHelicopter.GetPlayerSeat(player) == 0 && inputState.WasJustPressed(BUTTON.USE))
                 {
-                    //FireTurretsRockets(player);
-                    FireTurretsGuns(player);
-                }
+                    previousCrosshairSize = 0;
+                    instance.PrintToChat(showHUD.ToString());
+                    if (showHUD == 0)
+                    { showHUD = 1; return; }
 
-                if (baseHelicopter.GetPlayerSeat(player) == 0 && inputState.IsDown(BUTTON.FIRE_SECONDARY))
-                {
-                    //FireTurretsGuns(player);
-                }
+                    if (showHUD == 1)
+                    { showHUD = 2; return; }
 
-                if (baseHelicopter.GetPlayerSeat(player) == 0 && inputState.WasJustPressed(BUTTON.RELOAD))
+                    if (showHUD == 2)
+                    { showHUD = 0; return; }
+                }
+                if (baseHelicopter.GetPlayerSeat(player) == 0 && inputState.IsDown(BUTTON.FIRE_PRIMARY) && baseHeliType == HelicopterType.Mini)
                 {
-                    if (index == gunList.Count)
+                    FireTurretsGuns(player, turret1);
+                    FireTurretsGuns(player, turret2);
+                    FireTurretsGuns(player, turret3);
+                    FireTurretsGuns(player, turret4);
+                }
+                if (baseHelicopter.GetPlayerSeat(player) == 0 && inputState.IsDown(BUTTON.FIRE_PRIMARY) && baseHeliType == HelicopterType.Transport)
+                {
+                    FireTurretsGuns(player, turret1);
+                    FireTurretsGuns(player, turret2);
+                }
+                if (baseHelicopter.GetPlayerSeat(player) == 0 && inputState.IsDown(BUTTON.FIRE_SECONDARY) && baseHeliType == HelicopterType.Transport)
+                {
+                    FireTurretsRockets(player);
+                }
+                if (baseHelicopter.GetPlayerSeat(player) == 0 && inputState.WasJustPressed(BUTTON.RELOAD) && baseHeliType == HelicopterType.Mini)
+                {
+                    if (index == gunList.Count - 1)
                     {
                         index = 0;
                     }
@@ -357,52 +528,153 @@ namespace Oxide.Plugins
                     {
                         index++;
                     }
-                    ChangeGun(index);
+
+                    ChangeGun();
                 }
             }
 
-            private ItemDefinition ChangeGun(int index)
+            private void ResetAmmo()
             {
-                gunList = new Dictionary<string, string>();
-
-                gunList.Add("rifle.ak", "ammo.rifle");
-                gunList.Add("rifle.bolt", "ammo.rifle.hv");
-                gunList.Add("rifle.l96", "ammo.rifle.hv");
-                gunList.Add("rifle.lr300", "ammo.rifle");
-                gunList.Add("lmg.m249", "ammo.rifle");
-                gunList.Add("rifle.m39", "ammo.rifle");
-                gunList.Add("pistol.m92", "ammo.pistol");
-                gunList.Add("smg.mp5", "ammo.pistol");
-                gunList.Add("pistol.python", "ammo.pistol");
-                gunList.Add("pistol.revolver", "ammo.pistol");
-                gunList.Add("pistol.semiauto", "ammo.pistol");
-                gunList.Add("smg.2", "ammo.pistol");
-                gunList.Add("smg.thompson", "ammo.pistol");
-
-                gunList.Add("shotgun.double", "ammo.shotgun.fire");
-                gunList.Add("shotgun.pump", "ammo.shotgun");
-                gunList.Add("shotgun.spas12", "ammo.shotgun.slug");
-
-                try
+                if (Time.time > lastShot + 30 && numberOfRockets < 1)
                 {
-                    foreach (var turret in Turrets)
-                    {
-                        turret.inventory.Clear();
-                        ItemManager.CreateByName(gunList.ElementAt(index).Key, 1).MoveToContainer(turret.inventory, 0);
-                        ItemManager.CreateByName(gunList.ElementAt(index).Value, 1000).MoveToContainer(turret.inventory, 1);
-                        turret.UpdateAttachedWeapon();
-                        turret.Reload();
-                    }
+                    numberOfRockets = 12;
                 }
-                catch (Exception e)
-                { instance.Puts(e.Message); }
-
-                return ItemManager.FindItemDefinition(gunList.ElementAt(index).Key);
             }
 
+            #endregion Common
+
+            #region Mini
+
+            private void KeepFacingFrontMini(AutoTurret turret, Vector3 target)
+            {
+                if (turret != null && turret?.IsOnline() == true)
+                {
+                    turret.aimDir = target;
+                    turret?.SendAimDir();
+                    turret?.UpdateAiming();
+                }
+            }
+
+            public void SpawnWings()
+            {
+                SpawnBaseEntity(new Vector3(-0.3f, 0.2f, 0f), new Vector3(90, 0, 90), baseHelicopter, "assets/prefabs/deployable/signs/sign.post.single.prefab");
+                SpawnBaseEntity(new Vector3(0.3f, 0.2f, 0f), new Vector3(90, 0, 270), baseHelicopter, "assets/prefabs/deployable/signs/sign.post.single.prefab");
+
+                SpawnBaseEntity(new Vector3(-0.3f, 0.75f, 0f), new Vector3(90, 0, 90), baseHelicopter, "assets/prefabs/deployable/signs/sign.post.single.prefab");
+                SpawnBaseEntity(new Vector3(0.3f, 0.75f, 0f), new Vector3(90, 0, 270), baseHelicopter, "assets/prefabs/deployable/signs/sign.post.single.prefab");
+            }
+            private void SpawnGuns()
+            {
+                turret1 = SpawnTurret(new Vector3(1f, 0.5f, 0f), new Vector3(90, 0, 0), baseHelicopter);
+                turret2 = SpawnTurret(new Vector3(2f, 0.5f, 0f), new Vector3(90, 0, 0), baseHelicopter);
+                turret3 = SpawnTurret(new Vector3(-1f, 0.5f, 0f), new Vector3(90, 0, 0), baseHelicopter);
+                turret4 = SpawnTurret(new Vector3(-2f, 0.5f, 0f), new Vector3(90, 0, 0), baseHelicopter);
+                turretsCount = 4;
+            }
+
+            private int GetCrosshairSize()
+            {
+                return gunList[index].CrossHairSize;
+            }
+            private string GetCurrentWeaponName()
+            {
+                return gunList[index].GunName;
+            }
+            private void ChangeGun()
+            {
+                switch (baseHeliType)
+                {
+                    case HelicopterType.Mini:
+                        AttachWeapon(turret1);
+                        AttachWeapon(turret2);
+                        AttachWeapon(turret3);
+                        AttachWeapon(turret4);
+                        break;
+
+                    case HelicopterType.Transport:
+                        AttachWeapon(turret1);
+                        AttachWeapon(turret2);
+                        break;
+                }
+            }
+
+            private void AttachWeapon(AutoTurret turret)
+            {
+                if (turret != null)
+                {
+                    instance.Puts(gunList[index].GunItemName);
+
+                    ItemManager.CreateByName(gunList[index].GunItemName, 1).MoveToContainer(turret.inventory, 0);
+                    ItemManager.CreateByName(gunList[index].AmmoType, 1000).MoveToContainer(turret.inventory, 1);
+
+                    turret.UpdateAttachedWeapon();
+                    turret.Reload();
+                    turret.isLootable = false;
+                    turret.dropChance = 0;
+                }
+            }
+            public void FireTurretsGuns(BasePlayer player, AutoTurret turret)
+            {
+                if (turret.IsOnline() == true && canGunShoot)
+                {
+                    if (turret.GetAttachedWeapon().AmmoFraction() <= 0)
+                    {
+                        nextShootTime = Time.time + turret.GetAttachedWeapon().GetReloadDuration();
+                        TopUpAmmo();
+                        canGunShoot = false;
+                    }
+                    turret.FireAttachedGun(target, ConVar.PatrolHelicopter.bulletAccuracy);
+                }
+            }
+
+            private void TopUpAmmo()
+            {
+                turret1.GetAttachedWeapon().TopUpAmmo();
+                turret2.GetAttachedWeapon().TopUpAmmo();
+                turret3.GetAttachedWeapon().TopUpAmmo();
+                turret4.GetAttachedWeapon().TopUpAmmo();
+            }
+
+            #endregion Mini
+
+            #region Transport
+
+            private void MakeDoorsInactive(BaseEntity entity)
+            {
+                Door door = entity.GetComponent<Door>();
+                if (door != null)
+                {
+                    door.canHandOpen = false;
+                    door.canNpcOpen = false;
+                    door.canTakeCloser = false;
+                    door.canTakeKnocker = false;
+                    door.canTakeLock = false;
+                }
+            }
+            private BaseEntity SpawnArmament(Vector3 position, Vector3 rotation, BaseEntity parent)
+            {
+                BaseEntity entityParent = GameManager.server.CreateEntity("assets/prefabs/tools/pager/pager.entity.prefab", this.position, this.rotation, true);
+                entityParent.Spawn();
+                entityParent.SetParent(parent);
+                entityParent.transform.localPosition = position;
+                entityParent.transform.localEulerAngles = rotation;
+                AddEntityToData(entityParent, entityParent.transform.position);
+
+                BaseEntity entityTube = GameManager.server.CreateEntity("assets/prefabs/weapons/rocketlauncher/rocket_launcher.entity.prefab", this.position, this.rotation, true);
+                entityTube.SetParent(entityParent);
+                entityTube?.Spawn();
+
+                AddEntityToData(entityTube, entityTube.transform.position);
+                TubesEntities.Add(entityTube);
+                TubesParents.Add(entityParent);
+                return entityTube;
+            }
             internal void SpawnRockets()
             {
-                if (baseHelicopter == null) instance.Puts("Base heli is null");
+                if (baseHelicopter == null)
+                {
+                    instance.Puts("Base heli is null");
+                }
 
                 float yAdjustment = -.01f;
 
@@ -441,184 +713,25 @@ namespace Oxide.Plugins
                 SpawnBaseEntity(new Vector3(-0.6f, 0.7f, -3.2f), new Vector3(0f, 90f, 40f), baseHelicopter, "assets/bundled/prefabs/static/door.hinged.industrial_a_h.prefab");
                 SpawnBaseEntity(new Vector3(0.6f, 2.5f, -1.7f), new Vector3(180f, 0f, 0f) + new Vector3(0f, 90f, -40f), baseHelicopter, "assets/bundled/prefabs/static/door.hinged.industrial_a_h.prefab");
 
-                Turrets = new List<AutoTurret>
-                {
-                    SpawnTurret(new Vector3(2f, 1.4f, 0.5f), new Vector3(180, 0, 0), baseHelicopter),
-                    SpawnTurret(new Vector3(-2f, 1.4f, 0.5f), new Vector3(180, 0, 0), baseHelicopter)
-                };
-                PowerUp();
+                turret1 = SpawnTurret(new Vector3(2f, 1.4f, 0.5f), new Vector3(180, 0, 0), baseHelicopter);
+                turret2 = SpawnTurret(new Vector3(-2f, 1.4f, 0.5f), new Vector3(180, 0, 0), baseHelicopter);
 
-                turretsSpawned = true;
+                turretsCount = 2;
             }
-
-            private AutoTurret SpawnTurret(Vector3 position, Vector3 rotationEuler, BaseEntity parent)
-            {
-                var entity = GameManager.server.CreateEntity("assets/prefabs/npc/autoturret/autoturret_deployed.prefab", this.position, this.rotation, true);
-                if (parent != null)
-                {
-                    entity.SetParent(parent, 0);
-                    entity.transform.localEulerAngles = rotationEuler;
-                    entity.transform.localPosition = position;
-                }
-                entity?.Spawn();
-
-                AddEntityToData(entity, entity.transform.position);
-                entity.GetComponent<AutoTurret>().SetPeacekeepermode(true);
-                Turrets.Add(entity.GetComponent<AutoTurret>());
-                return entity.GetComponent<AutoTurret>();
-            }
-
-            private BaseEntity SpawnBaseEntity(Vector3 position, Vector3 rotationEuler, BaseEntity parent, string prefab)
-            {
-                var entity = GameManager.server.CreateEntity(prefab, baseHelicopter.transform.position, baseHelicopter.transform.rotation, true);
-
-                if (parent != null)
-                {
-                    entity.SetParent(parent, 0);
-                    entity.transform.localEulerAngles = rotationEuler;
-                    entity.transform.localPosition = position;
-                }
-                entity?.Spawn();
-                AddEntityToData(entity, entity.transform.position);
-                MakeDoorsInactive(entity);
-
-                return entity;
-            }
-            private void SpawnGuns()
-            {
-                Turrets = new List<AutoTurret> {
-                    SpawnTurret(new Vector3(1f, 0.5f, 0f), new Vector3(90, 0, 0), baseHelicopter),
-                    SpawnTurret(new Vector3(2f, 0.5f, 0f), new Vector3(90, 0, 0), baseHelicopter),
-                    SpawnTurret(new Vector3(-1f, 0.5f, 0f), new Vector3(90, 0, 0), baseHelicopter),
-                    SpawnTurret(new Vector3(-2f, 0.5f, 0f), new Vector3(90, 0, 0), baseHelicopter)
-                };
-
-                turretsSpawned = true;
-                PowerUp();
-            }
-
-            private BaseEntity SpawnArmament(Vector3 position, Vector3 rotation, BaseEntity parent)
-            {
-                var entityParent = GameManager.server.CreateEntity("assets/prefabs/tools/pager/pager.entity.prefab", this.position, this.rotation, true);
-                entityParent.Spawn();
-                entityParent.SetParent(parent);
-                entityParent.transform.localPosition = position;
-                entityParent.transform.localEulerAngles = rotation;
-                AddEntityToData(entityParent, entityParent.transform.position);
-
-                var entityTube = GameManager.server.CreateEntity("assets/prefabs/weapons/rocketlauncher/rocket_launcher.entity.prefab", this.position, this.rotation, true);
-                entityTube.SetParent(entityParent);
-                entityTube?.Spawn();
-
-                AddEntityToData(entityTube, entityTube.transform.position);
-                TubesEntities.Add(entityTube);
-                TubesParents.Add(entityParent);
-                return entityTube;
-            }
-
-            public void SpawnWings()
-            {
-                SpawnBaseEntity(new Vector3(-0.3f, 0.2f, 0f), new Vector3(90, 0, 90), baseHelicopter, "assets/prefabs/deployable/signs/sign.post.single.prefab");
-                SpawnBaseEntity(new Vector3(0.3f, 0.2f, 0f), new Vector3(90, 0, 270), baseHelicopter, "assets/prefabs/deployable/signs/sign.post.single.prefab");
-
-                SpawnBaseEntity(new Vector3(-0.3f, 0.75f, 0f), new Vector3(90, 0, 90), baseHelicopter, "assets/prefabs/deployable/signs/sign.post.single.prefab");
-                SpawnBaseEntity(new Vector3(0.3f, 0.75f, 0f), new Vector3(90, 0, 270), baseHelicopter, "assets/prefabs/deployable/signs/sign.post.single.prefab");
-            }
-            public void PowerUp()
-            {
-                foreach (var turret in Turrets)
-                {
-                    try { turret.UpdateFromInput(100, 1); } catch { }
-                }
-            }
-            public void PowerDown()
-            {
-                foreach (var turret in Turrets)
-                {
-                    try { turret.UpdateFromInput(0, 1); } catch { }
-                }
-            }
-
-            private void ResetAmmo()
-            {
-                if (Time.time > lastShot + 120 && storageContainer.inventory.itemList.Count == 0 && storageContainer.inventory.itemList.Count < 12)
-                {
-                    storageContainer.inventory.AddItem(ItemManager.FindItemDefinition("ammo.rocket.fire"), 12);
-                    instance.Puts($"Current pilot: transportCopter.GetDriver().displayName");
-                    baseHelicopter.GetDriver().ChatMessage("Rockets reloaded!");
-                }
-            }
-
-            private void KeepFacingFrontMini(AutoTurret turret, Vector3 target)
-            {
-                try
-                {
-                    if (turret != null && turret?.IsOnline() == true)
-                    {
-                        turret.aimDir = target;
-                        turret?.SendAimDir();
-                        turret?.UpdateAiming();
-                    }
-                }
-                catch { }
-            }
-            private void KeepFacingFrontTransport(AutoTurret turret)
-            {
-                try
-                {
-                    if (turret != null && turret?.IsOnline() == true)
-                    {
-                        turret?.Reload();
-                        turret.aimDir = baseHelicopter.transform.forward;
-                        turret?.SendAimDir();
-                        turret?.UpdateAiming();
-                    }
-                }
-                catch { }
-            }
-
-            private void MakeDoorsInactive(BaseEntity entity)
-            {
-                var door = entity.GetComponent<Door>();
-                if (door != null)
-                {
-                    door.canHandOpen = false;
-                    door.canNpcOpen = false;
-                    door.canTakeCloser = false;
-                    door.canTakeKnocker = false;
-                    door.canTakeLock = false;
-                }
-            }
+            #endregion Transport
 
             private Vector3 GetDirection(float accuracy)
             {
-                return (Vector3)(Quaternion.Euler(UnityEngine.Random.Range((float)(-accuracy * 0.5f), (float)(accuracy * 0.5f)), UnityEngine.Random.Range((float)(-accuracy * 0.5f), (float)(accuracy * 0.5f)), UnityEngine.Random.Range((float)(-accuracy * 0.5f), (float)(accuracy * 0.5f))) * baseHelicopter.transform.forward);
-            }
-
-            private string GetProjectileFromItem(Item item)
-            {
-                if (item.info.shortname == "ammo.rocket.basic")
-                {
-                    return "assets/prefabs/ammo/rocket/rocket_basic.prefab";
-                }
-                if (item.info.shortname == "ammo.rocket.fire")
-                {
-                    return "assets/prefabs/ammo/rocket/rocket_fire.prefab";
-                }
-                if (item.info.shortname == "ammo.rocket.hv")
-                {
-                    return "assets/prefabs/ammo/rocket/rocket_hv.prefab";
-                }
-                return "";
+                return Quaternion.Euler(UnityEngine.Random.Range(-accuracy * 0.5f, accuracy * 0.5f), UnityEngine.Random.Range(-accuracy * 0.5f, accuracy * 0.5f), UnityEngine.Random.Range(-accuracy * 0.5f, accuracy * 0.5f)) * baseHelicopter.transform.forward;
             }
 
             internal void FireTurretsRockets(BasePlayer player)
             {
-                string projectile = GetProjectileFromItem(storageContainer.inventory.itemList[0]);
-
-                if (projectile != "")
+                if (Time.time > lastShot + 0.25 && numberOfRockets > 0)
                 {
-                    storageContainer.inventory.itemList[0].UseItem();
+                    string projectile = "assets/prefabs/ammo/rocket/rocket_fire.prefab";
+
+                    numberOfRockets -= 1;
 
                     float offset_left_x = -3.15f;
                     float offset_right_x = 2.85f;
@@ -646,9 +759,9 @@ namespace Oxide.Plugins
 
                     Vector3 originR = TubesParents[currentTubeIndex].transform.position;
 
-                    var direction = GetDirection(4f);
+                    Vector3 direction = GetDirection(4f);
 
-                    var rocketsR = GameManager.server.CreateEntity(projectile, originR);
+                    BaseEntity rocketsR = GameManager.server.CreateEntity(projectile, originR);
 
                     if (rocketsR != null)
                     {
@@ -660,11 +773,11 @@ namespace Oxide.Plugins
                         {
                             currentTubeIndex++;
                         }
-                        rocketsR.SendMessage("InitializeVelocity", (Vector3)(direction * 75f));
+
+                        rocketsR.SendMessage("InitializeVelocity", direction * 75f);
                         rocketsR.Spawn();
+
                         lastShot = Time.time;
-                        var itemAmount = storageContainer.inventory.FindItemsByItemName("ammo.rocket.fire").amount;
-                        if (itemAmount > 0) { baseHelicopter.GetDriver().ChatMessage($"Rockets left: {storageContainer.inventory.FindItemsByItemName("ammo.rocket.fire").amount}"); }
                     }
                 }
             }
@@ -680,114 +793,394 @@ namespace Oxide.Plugins
                 return hitpoint;
             }
 
-            private Vector3 target;
-            private int index = 0;
-            private float nextShootTime;
-            private bool canGunShoot = true;
-            private CuiElementContainer elementContainer;
-            private Dictionary<string, int> crossSize;
-
-            public void FireTurretsGuns(BasePlayer player)
+            private void ShowUICrosshair(BasePlayer player, int crosshairSize)
             {
-                try
+
+
+                DestroyUICrosshair(player);
+                LabelOnScreen(player, new Vector2(0f, 0f), "◎", instance.crosshair, "crosshair", crosshairSize);
+                CuiHelper.AddUi(player, instance.crosshair);
+
+            }
+
+            private void ShowUICurrentWeapon(BasePlayer player, string currentWeapon)
+            {
+                DestroyUICurrentWeapon(player);
+                if (showHUD == 0)
                 {
-                    foreach (var turret in Turrets)
+                    if (previousWeapon != currentWeapon)
                     {
-                        if (turret.IsOnline() == true && canGunShoot)
-                        {
-                            if (turret.GetAttachedWeapon().AmmoFraction() <= 0)
-                            {
-                                nextShootTime = Time.time + turret.GetAttachedWeapon().GetReloadDuration();
-                                foreach (var turretToReload in Turrets)
-                                {
-                                    turretToReload.GetAttachedWeapon().TopUpAmmo();
-                                }
-                                canGunShoot = false;
-                            }
-                            turret.FireAttachedGun(target, ConVar.PatrolHelicopter.bulletAccuracy);
-                        }
+
+                        LabelOnScreen(player, new Vector2(0f, -0.2f), currentWeapon, instance.currentWeapon, "currentWeapon");
+                        CuiHelper.AddUi(player, instance.currentWeapon);
+                        previousWeapon = currentWeapon;
                     }
                 }
-                catch (Exception e) { instance.Puts($"FireTurretsGuns: {e.Message}"); };
             }
 
-            private void ShowIU(string pitchValue, string rollValue, string yawValue, BasePlayer player, int cSize)
+            private void ShowUIAmmoCount(BasePlayer player, string ammoCount)
             {
-                var color = "0 255 0 1";
-                var fontSize = 24;
-                var align = TextAnchor.MiddleCenter;
-
-
-                DestroyUi(player);
-
-                CuiElementContainer indicators = new CuiElementContainer();
-
-                indicators.Add(new CuiLabel
+                DestroyUIAmmoCount(player);
+                if (showHUD == 0)
                 {
-                    Text = { Color = color, FontSize = fontSize, Align = align, Text = pitchValue },
-                    RectTransform = { AnchorMin = "0.30 0.10", AnchorMax = "0.50 0.50" }
-                }, "Hud", "pitch");
+                    if (previousAmmoCount != ammoCount)
+                    {
 
-                indicators.Add(new CuiLabel
-                {
-                    Text = { Color = color, FontSize = fontSize, Align = align, Text = rollValue },
-                    RectTransform = { AnchorMin = "0.10 0.10", AnchorMax = "0.30 0.50" }
-                }, "Hud", "roll");
-
-                indicators.Add(new CuiLabel
-                {
-                    Text = { Color = color, FontSize = fontSize, Align = align, Text = yawValue },
-                    RectTransform = { AnchorMin = "0.20 0.10", AnchorMax = "0.4 0.50" }
-                }, "Hud", "yaw");
-
-                instance.PrintToChat(Interface.Oxide.DataDirectory.ToString());
-
-                indicators.Add(new CuiLabel
-                {
-                    Text = { Color = color, FontSize = cSize , Align = align, Text = "◎" },
-                    RectTransform = { AnchorMin = "0.28 0.27", AnchorMax = "0.72 0.73" }, 
-                }, "Hud", "crosshair");
-
-
-                CuiHelper.AddUi(player, indicators);
+                        LabelOnScreen(player, new Vector2(0f, -0.25f), ammoCount, instance.ammoCount, "ammoCount");
+                        CuiHelper.AddUi(player, instance.ammoCount);
+                        previousAmmoCount = ammoCount;
+                    }
+                }
             }
 
-            private int GetCrosshairSize()
+            private void ShowUIRocketCount(BasePlayer player)
             {
-                var currentWeapon = gunList.ElementAt(index).Key;
+                DestroyUIRocketCount(player);
+                if (showHUD == 0)
+                {
+                    var reloadTime = lastShot + 30 - Time.time;
 
-                crossSize = new Dictionary<string, int>();
-
-                crossSize.Add("rifle.ak", 72);
-                crossSize.Add("rifle.bolt", 30);
-                crossSize.Add("rifle.l96", 30);
-                crossSize.Add("rifle.lr300", 72);
-                crossSize.Add("lmg.m249", 100);
-                crossSize.Add("rifle.m39", 36);
-                crossSize.Add("pistol.m92", 48);
-                crossSize.Add("smg.mp5",64);
-                crossSize.Add("pistol.python", 48);
-                crossSize.Add("pistol.revolver", 48);
-                crossSize.Add("pistol.semiauto", 48);
-                crossSize.Add("smg.2", 64);
-                crossSize.Add("smg.thompson", 64);
-
-                crossSize.Add("shotgun.double", 240);
-                crossSize.Add("shotgun.pump", 240);
-                crossSize.Add("shotgun.spas12", 72);
-
-                return crossSize[currentWeapon];
+                    if (baseHeliType == HelicopterType.Transport)
+                    {
+                        if (canFireRockets)
+                        {
+                            LabelOnScreen(player, new Vector2(0f, -0.30f), $"Rockets: {numberOfRockets} ", instance.rocketCount, "rocketCount");
+                        }
+                        if (!canFireRockets && reloadTime > 0)
+                        {
+                            LabelOnScreen(player, new Vector2(0f, -0.30f), $"Rockets: reloading ({reloadTime} seconds). ", instance.rocketCount, "rocketCount");
+                        }
+                    }
+                    CuiHelper.AddUi(player, instance.rocketCount);
+                }
             }
 
-            public void DestroyUi(BasePlayer player)
+            private void ShowSpeedUI(BasePlayer player)
             {
-                CuiHelper.DestroyUi(player, "Hud");
+                DestroyUiSpeed(player);
+                if (showHUD == 0)
+                {
+                    Vector3 currentPosition = baseHelicopter.transform.position;
+                    float speed = (Vector3.Distance(lastPosition, currentPosition) / Time.deltaTime) * 1.8f;
 
-                CuiHelper.DestroyUi(player, "pitch");
-                CuiHelper.DestroyUi(player, "roll");
-                CuiHelper.DestroyUi(player, "yaw");
+                    if (previousSpeedText != speed)
+                    {
+                        lastPosition = currentPosition;
+
+                        Vector2 speedArrowPoint = new Vector2(-0.198f, (speed * 0.005f) - 0.24f);
+                        string pointerTextSpeed = $"{speed:0.0} km/h ►";
+
+
+                        ButtonOnScreen(player, new Vector2(-0.168f, 0), 0.48f, 0.002f, instance.speedIndicators, "speedBar");
+                        LabelOnScreen(player, speedArrowPoint, pointerTextSpeed, instance.speedIndicators, "speedPointer");
+
+                        CuiHelper.AddUi(player, instance.speedIndicators);
+                        previousSpeedText = speed;
+                    }
+                }
+            }
+
+            private void ShowHeightUI(BasePlayer player)
+            {
+                DestroyUiHeight(player);
+                if (showHUD == 0)
+                {
+                    float hValue = GetHeightValue();
+
+                    if (previousHValue != hValue)
+                    {
+                        Vector2 pointerPoint = new Vector2(0.191f, (hValue * 0.0025f) - 0.24f);
+                        string pointerTextHeight = $"◄ {hValue:0.0} m";
+
+
+                        ButtonOnScreen(player, new Vector2(0.168f, 0), 0.48f, 0.0025f, instance.heightIndicators, "heightBar");
+                        LabelOnScreen(player, pointerPoint, pointerTextHeight, instance.heightIndicators, "heightPointer");
+
+                        CuiHelper.AddUi(player, instance.heightIndicators);
+                        previousHValue = hValue;
+                    }
+                }
+            }
+
+            private void LabelOnScreen(BasePlayer player, Vector2 pointCoords, string text, CuiElementContainer container, string elementName = "", int fontSize = 16)
+            {
+                Vector2 point = new Vector2(0.5f, 0.5f) + pointCoords;
+                string colorGreen = "0 255 0 1";
+                TextAnchor align = TextAnchor.MiddleCenter;
+                float h = 0.2f;
+
+                float xmin = point.x - h;
+                float xmax = point.x + h;
+                float ymin = point.y - h;
+                float ymax = point.y + h;
+
+                if (elementName == "")
+                {
+                    elementName = $"{text}_{pointCoords}_{player.net.ID}";
+                }
+
+                container.Add(new CuiLabel
+                {
+                    Text = { Color = colorGreen, FontSize = fontSize, Align = align, Text = text },
+                    RectTransform = { AnchorMin = $"{xmin} {ymin}", AnchorMax = $"{xmax} {ymax}" }
+                }, "Hud", elementName);
+            }
+
+            private void ButtonOnScreen(BasePlayer player, Vector2 pointCoords, float height, float width, CuiElementContainer container, string elementName = "")
+            {
+                Vector2 point = new Vector2(0.5f, 0.5f) + pointCoords;
+                string colorGreen = "0 255 0 1";
+                TextAnchor align = TextAnchor.MiddleCenter;
+
+                float xmin = point.x - width / 2;
+                float xmax = point.x + width / 2;
+                float ymin = point.y - height / 2;
+                float ymax = point.y + height / 2;
+
+                if (elementName == "")
+                {
+                    elementName = $"button_{pointCoords}_{player.net.ID}";
+                }
+
+                container.Add(new CuiPanel
+                {
+                    Image = { Color = colorGreen },
+                    RectTransform = { AnchorMin = $"{xmin} {ymin}", AnchorMax = $"{xmax} {ymax}" }
+                }, "Hud", elementName);
+            }
+
+            private float GetHeightValue()
+            {
+                RaycastHit hitInfo;
+
+                if (!UnityEngine.Physics.Raycast(baseHelicopter.transform.position, -baseHelicopter.transform.up, out hitInfo, Mathf.Infinity, -1063040255))
+                {
+                }
+
+                return hitInfo.distance;
+            }
+            private void ShowRollLinesUI(BasePlayer player, float angleValue, float pitchValue)
+            {
+                DestroyHLines(player);
+                if (showHUD == 0 || showHUD == 1)                    
+                {
+                    string colorGreen = "0 255 0 1";
+                    float angle = angleValue / 45;
+                    int fontSize = 24;
+                    string text = "┈";
+                    Vector2 screenMiddle = new Vector2(0.5f, 0.5f);
+
+                    float h = 0.05f;
+
+                    for (int k = 0; k < 3; k++)
+                    {
+                        Vector2 newCenter = screenMiddle + new Vector2(0, (-pitchValue / 180));
+
+                        instance.hLines = hLinesHeli;
+                        for (int i = 0; i < 5; i++)
+                        {
+                            float newY = (float)((0.04f + (0.02f * i)) * Math.Sin(angle));
+                            float newX = (float)((0.04f + (0.02f * i)) * Math.Cos(angle));
+                            Vector2 point = newCenter + new Vector2(newX, newY);
+
+                            float xmin = point.x - h;
+                            float xmax = point.x + h;
+                            float ymin = point.y - h;
+                            float ymax = point.y + h;
+
+                            hLinesHeli.Add(new CuiLabel
+                            {
+                                Text = { Color = colorGreen, FontSize = fontSize, Align = TextAnchor.MiddleCenter, Text = text },
+                                RectTransform = { AnchorMin = $"{xmin} {ymin}", AnchorMax = $"{xmax} {ymax}" }
+                            }, "Hud", $"pointR{k}{i}");
+
+                            point = newCenter - new Vector2(newX, newY);
+
+                            xmin = point.x - h;
+                            xmax = point.x + h;
+                            ymin = point.y - h;
+                            ymax = point.y + h;
+
+                            hLinesHeli.Add(new CuiLabel
+                            {
+                                Text = { Color = colorGreen, FontSize = fontSize, Align = TextAnchor.MiddleCenter, Text = text },
+                                RectTransform = { AnchorMin = $"{xmin} {ymin}", AnchorMax = $"{xmax} {ymax}" }
+                            }, "Hud", $"pointL{k}{i}");
+                        }
+
+                    }
+
+                    float newY2 = (float)((0.04f + (0.02f * 5f)) * Math.Sin(angle));
+                    float newX2 = (float)((0.04f + (0.02f * 5f)) * Math.Cos(angle));
+
+                    var pointValue = screenMiddle + new Vector2(0, (-pitchValue / 180)) + new Vector2(newX2, newY2);
+
+                    float xmin2 = pointValue.x - h;
+                    float xmax2 = pointValue.x + h;
+                    float ymin2 = pointValue.y - h;
+                    float ymax2 = pointValue.y + h;
+
+                    hLinesHeli.Add(new CuiLabel
+                    {
+                        Text = { Color = colorGreen, FontSize = 12, Align = TextAnchor.MiddleCenter, Text = pitchValue.ToString("0.0") },
+                        RectTransform = { AnchorMin = $"{xmin2} {ymin2}", AnchorMax = $"{xmax2} {ymax2}" }
+                    }, "Hud", $"pointRValue");
+
+                    pointValue = screenMiddle + new Vector2(0, (-pitchValue / 180)) - new Vector2(newX2, newY2);
+
+                    xmin2 = pointValue.x - h;
+                    xmax2 = pointValue.x + h;
+                    ymin2 = pointValue.y - h;
+                    ymax2 = pointValue.y + h;
+
+                    hLinesHeli.Add(new CuiLabel
+                    {
+                        Text = { Color = colorGreen, FontSize = 12, Align = TextAnchor.MiddleCenter, Text = pitchValue.ToString("0.0") },
+                        RectTransform = { AnchorMin = $"{xmin2} {ymin2}", AnchorMax = $"{xmax2} {ymax2}" }
+                    }, "Hud", $"pointLValue");
+
+
+                    CuiHelper.AddUi(player, hLinesHeli);
+                }
+            }
+            public void DestroyUICrosshair(BasePlayer player)
+            {
                 CuiHelper.DestroyUi(player, "crosshair");
+                instance.crosshair.Clear();
             }
+            public void DestroyUICurrentWeapon(BasePlayer player)
+            {
+                CuiHelper.DestroyUi(player, "currentWeapon");
+                instance.currentWeapon.Clear();
+            }
+            public void DestroyUIAmmoCount(BasePlayer player)
+            {
+                CuiHelper.DestroyUi(player, "ammoCount");
+                instance.ammoCount.Clear();
+            }
+            public void DestroyUIRocketCount(BasePlayer player)
+            {
+                CuiHelper.DestroyUi(player, "rocketCount");
+                instance.rocketCount.Clear();
+            }
+            public void DestroyUiMain(BasePlayer player)
+            {
+                CuiHelper.DestroyUi(player, "crosshair");
+                CuiHelper.DestroyUi(player, "currentWeapon");
+                CuiHelper.DestroyUi(player, "ammoCount");
+                CuiHelper.DestroyUi(player, "rocketCount");
+                instance.mainIndicators.Clear();
+            }
+
+            public void DestroyUiSpeed(BasePlayer player)
+            {
+                CuiHelper.DestroyUi(player, "speedPointer");
+                CuiHelper.DestroyUi(player, "speedBar");
+                instance.speedIndicators.Clear();
+            }
+
+            public void DestroyUiHeight(BasePlayer player)
+            {
+                CuiHelper.DestroyUi(player, "heightPointer");
+                CuiHelper.DestroyUi(player, "heightBar");
+                instance.heightIndicators.Clear();
+            }
+
+            private void DestroyHLines(BasePlayer player)
+            {
+                foreach (CuiElement el in hLinesHeli)
+                {
+                    CuiHelper.DestroyUi(player, el.Name);
+                }
+
+                hLinesHeli.Clear();
+            }
+
+            private void DestroyStaticLines(BasePlayer player)
+            {
+                for (int i = 0; i < 13; i++)
+                {
+                    CuiHelper.DestroyUi(player, $"lines{i * 0.002f}{-0.16f}");
+                    CuiHelper.DestroyUi(player, $"lines{i * -0.002f}{-0.16f}");
+                    CuiHelper.DestroyUi(player, $"lines{i * 0.002f}{0.16f}");
+                    CuiHelper.DestroyUi(player, $"lines{i * -0.002f}{0.16f}");
+                }
+                instance.verticalLineShow = true;
+                instance.lines.Clear();
+            }
+        }
+
+        private void DestroyUI(BasePlayer player)
+        {
+            instance.verticalLineShow = true;
+
+            for (int i = 0; i < 13; i++)
+            {
+                CuiHelper.DestroyUi(player, $"lines{i * 0.002f}{-0.16f}");
+                CuiHelper.DestroyUi(player, $"lines{i * -0.002f}{-0.16f}");
+                CuiHelper.DestroyUi(player, $"lines{i * 0.002f}{0.16f}");
+                CuiHelper.DestroyUi(player, $"lines{i * -0.002f}{0.16f}");
+            }
+
+
+            CuiHelper.DestroyUi(player, "crosshair");
+            CuiHelper.DestroyUi(player, "currentWeapon");
+            CuiHelper.DestroyUi(player, "ammoCount");
+            CuiHelper.DestroyUi(player, "rocketCount");
+
+            CuiHelper.DestroyUi(player, "speedPointer");
+            CuiHelper.DestroyUi(player, "speedBar");
+
+            CuiHelper.DestroyUi(player, "heightPointer");
+            CuiHelper.DestroyUi(player, "heightBar");
+
+            CuiHelper.DestroyUi(player, "pitch0");
+            CuiHelper.DestroyUi(player, "pitch1");
+            CuiHelper.DestroyUi(player, "pitch2");
+            CuiHelper.DestroyUi(player, "pitch3");
+            CuiHelper.DestroyUi(player, "pitch4");
+            CuiHelper.DestroyUi(player, "pitch5");
+            CuiHelper.DestroyUi(player, "pitchMain");
+
+            CuiHelper.DestroyUi(player, "pitch-0");
+            CuiHelper.DestroyUi(player, "pitch-1");
+            CuiHelper.DestroyUi(player, "pitch-2");
+            CuiHelper.DestroyUi(player, "pitch-3");
+            CuiHelper.DestroyUi(player, "pitch-4");
+            CuiHelper.DestroyUi(player, "pitch-5");
+
+            foreach (CuiElement el in hLines)
+            {
+                CuiHelper.DestroyUi(player, el.Name);
+            }
+
+            instance.mainIndicators.Clear();
+            instance.speedIndicators.Clear();
+            instance.heightIndicators.Clear();
+
+            instance.crosshair.Clear();
+            instance.currentWeapon.Clear();
+            instance.ammoCount.Clear();
+            instance.rocketCount.Clear();
+
+            instance.lines.Clear();
+            instance.hLines.Clear();
+        }
+        public class Gun : MonoBehaviour
+        {
+            public Gun(string gunName, string gunItemName,
+                string ammoType, int crossHairSize)
+            {
+                GunName = gunName;
+                GunItemName = gunItemName;
+                AmmoType = ammoType;
+                CrossHairSize = crossHairSize;
+            }
+
+            public string GunName { get; set; }
+            public string GunItemName { get; set; }
+            public string AmmoType { get; set; }
+            public int CrossHairSize { get; set; }
         }
     }
 }
